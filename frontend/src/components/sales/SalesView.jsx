@@ -111,6 +111,11 @@ export default function SalesView() {
                   <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
                     {s.payment_type}
                   </span>
+                  {s.payments?.length > 0 && (
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {s.payments.map((payment) => payment.payment_method).join(' + ')}
+                    </p>
+                  )}
                 </td>
                 <td className="p-3.5 text-right font-bold text-slate-900 font-display">{formatINR(s.final_payable)}</td>
                 <td className="p-3.5 text-right font-semibold text-emerald-600 font-display">{formatINR(s.paid_amount)}</td>
@@ -182,6 +187,23 @@ export default function SalesView() {
               {selectedSale.balance_due > 0 && (
                 <div className="flex justify-between text-rose-600 font-bold"><span>Balance Due:</span><span>{formatINR(selectedSale.balance_due)}</span></div>
               )}
+            </div>
+
+            <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-1 text-xs">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold text-slate-700">Payment Breakdown</span>
+                <span className="text-[10px] text-slate-500">{selectedSale.payments?.length || 0} method(s)</span>
+              </div>
+              {selectedSale.payments?.length ? selectedSale.payments.map((payment) => (
+                <div key={payment.id} className="flex justify-between text-slate-600">
+                  <span>{payment.payment_method}{payment.reference_number ? ` • ${payment.reference_number}` : ''}</span>
+                  <span className="font-semibold text-slate-900">{formatINR(payment.amount)}</span>
+                </div>
+              )) : <p className="text-[11px] text-slate-500">No payment rows recorded.</p>}
+              <div className="flex justify-between pt-1 mt-1 border-t border-slate-100 font-bold">
+                <span>Total Paid</span>
+                <span className="text-emerald-700">{formatINR(selectedSale.paid_amount)}</span>
+              </div>
             </div>
 
             <div className="flex gap-2 pt-2">

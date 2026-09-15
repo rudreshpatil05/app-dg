@@ -10,6 +10,7 @@ from app.schemas.product import (
     SerialNumberResponse, SerialNumberCreate
 )
 from app.auth import get_current_user
+from app.utils.pagination import paginate_items
 
 router = APIRouter(prefix="/inventory", tags=["Inventory & IMEI Tracking"])
 
@@ -28,12 +29,14 @@ def create_category(cat: CategoryCreate, db: Session = Depends(get_db), current_
     db.refresh(c_obj)
     return c_obj
 
-@router.get("/products", response_model=List[ProductResponse])
+@router.get("/products")
 def list_products(
     category_id: Optional[int] = None,
     brand: Optional[str] = None,
     search: Optional[str] = None,
     low_stock_only: bool = False,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -70,7 +73,7 @@ def list_products(
         if is_staff:
             p_resp.purchase_cost = 0.0 # Mask purchase cost for sales staff!
         results.append(p_resp)
-    return results
+    return paginate_items(results, page=page, page_size=page_size)
 
 @router.post("/products", response_model=ProductResponse)
 def create_product(

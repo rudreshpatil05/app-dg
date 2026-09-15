@@ -201,12 +201,23 @@ def process_pos_sale(
     # 5. Process Payments & Balance Due
     total_paid = 0.0
     payment_records = []
+    allowed_payment_methods = {"CASH", "UPI", "CARD", "BANK", "CREDIT", "EMI"}
     if payments_data:
         for p in payments_data:
             amt = float(p.get("amount", 0.0))
+            method = str(p.get("payment_method", "")).upper()
+            if method not in allowed_payment_methods:
+                raise ValueError(f"Unsupported payment method: {method}")
+            if amt < 0:
+                raise ValueError("Payment amount cannot be negative")
             if amt > 0:
-                total_paid += amt
-                payment_records.append(p)
+                total_paid = round(total_paid + amt, 2)
+                payment_records.append({**p, "payment_method": method, "amount": amt})
+
+    if total_paid > final_payable + 0.01:
+        raise ValueError(
+            f"Total paid ({total_paid:.2f}) cannot exceed bill amount ({final_payable:.2f})"
+        )
 
     balance_due = max(0.0, round(final_payable - total_paid, 2))
     

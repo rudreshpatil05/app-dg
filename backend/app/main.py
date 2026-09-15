@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base
 import app.models
@@ -15,6 +18,33 @@ app = FastAPI(
     description="All-in-one Retail Operating System combining Khatabook + Vyapar + Specialized Mobile & Electronics Store ERP",
     version="1.0.0"
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "success": False,
+            "error": {
+                "code": 422,
+                "message": "Validation failed",
+                "details": exc.errors(),
+            },
+        },
+    )
+
+@app.exception_handler(404)
+async def not_found_exception_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={
+            "success": False,
+            "error": {
+                "code": 404,
+                "message": "Resource not found",
+            },
+        },
+    )
 
 # CORS Middleware
 app.add_middleware(
@@ -39,12 +69,34 @@ app.include_router(specialized.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
 app.include_router(settings_router.router, prefix=settings.API_V1_STR)
 
-@app.get("/api/health")
-def health_check():
+@app.get("/")
+def root_metadata():
     return {
-        "status": "healthy",
         "app": "DG-Retail OS",
         "version": settings.VERSION,
+        "api_base": settings.API_V1_STR,
+        "health_url": f"{settings.API_V1_STR}/health",
+        "docs_url": "/docs",
+        "openapi_url": "/openapi.json",
         "currency": settings.DEFAULT_CURRENCY,
-        "currency_symbol": settings.DEFAULT_CURRENCY_SYMBOL
+        "currency_symbol": settings.DEFAULT_CURRENCY_SYMBOL,
+    }
+
+@app.get("/api/health")
+def health_check():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        db_connected = True
+    except Exception:
+        db_connected = False
+
+    return {
+        "status": "healthy" if db_connected else "degraded",
+        "app": "DG-Retail OS",
+        "version": settings.VERSION,
+        "db_connected": db_connected,
+        "currency": settings.DEFAULT_CURRENCY,
+        "currency_symbol": settings.DEFAULT_CURRENCY_SYMBOL,
+        "api_base": settings.API_V1_STR,
     }

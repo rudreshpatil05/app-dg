@@ -5,9 +5,10 @@ const AppContext = createContext();
 
 export function AppProvider({ children }) {
   const [business, setBusiness] = useState({
-    name: 'Shree Ganesh Mobile & Electronics',
+    name: 'DG Mobile and Electronics',
     phone: '9822012345',
-    city: 'Pune',
+    city: 'Roha',
+    address: 'Near ST Stand, Roha',
     gstin: '27AABCS1429B1Z8',
     upi_id: 'shreeganesh@icici',
     invoice_prefix: 'SGM',
@@ -43,9 +44,10 @@ export function AppProvider({ children }) {
   const loadNotifications = async () => {
     try {
       const notifs = await api.getNotifications(false);
-      setNotifications(notifs);
+      setNotifications(Array.isArray(notifs) ? notifs : (notifs.items || []));
     } catch (err) {
       console.warn('Could not load notifications:', err.message);
+      setNotifications([]);
     }
   };
 

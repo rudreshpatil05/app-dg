@@ -48,11 +48,14 @@ export default function InventoryView() {
         api.getSerialNumbers({ status: statusFilter !== 'ALL' ? statusFilter : undefined }),
         api.getCategories()
       ]);
-      setProducts(prodsData);
-      setSerials(serialsData);
-      setCategories(catsData);
-      if (catsData.length > 0 && !newProduct.category_id) {
-        setNewProduct(prev => ({ ...prev, category_id: catsData[0].id }));
+      const productList = Array.isArray(prodsData) ? prodsData : (prodsData.items || []);
+      const serialList = Array.isArray(serialsData) ? serialsData : (serialsData.items || []);
+      const categoryList = Array.isArray(catsData) ? catsData : (catsData.items || []);
+      setProducts(productList);
+      setSerials(serialList);
+      setCategories(categoryList);
+      if (categoryList.length > 0 && !newProduct.category_id) {
+        setNewProduct(prev => ({ ...prev, category_id: categoryList[0].id }));
       }
     } catch (err) {
       console.error(err);

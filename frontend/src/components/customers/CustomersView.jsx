@@ -35,9 +35,10 @@ export default function CustomersView() {
     setLoading(true);
     try {
       const data = await api.getCustomers({ balance_filter: balanceFilter === 'OWES_MONEY' ? 'OWES_MONEY' : undefined });
-      setCustomers(data);
-      if (data.length > 0 && !selectedCustomer) {
-        selectCustomer(data[0]);
+      const customerList = Array.isArray(data) ? data : (data.items || []);
+      setCustomers(customerList);
+      if (customerList.length > 0 && !selectedCustomer) {
+        selectCustomer(customerList[0]);
       }
     } catch (err) {
       console.error(err);

@@ -10,12 +10,14 @@ from app.models.party import Customer, Supplier
 from app.models.finance import Expense, Account
 from app.models.emi import EmiPlan
 from app.auth import get_current_user
+from app.utils.pagination import paginate_items
 
 router = APIRouter(prefix="/settings", tags=["Settings, Audit Logs & Backups"])
 
 @router.get("/audit-logs")
 def list_audit_logs(
-    limit: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -24,9 +26,9 @@ def list_audit_logs(
 
     logs = db.query(AuditLog).filter(
         AuditLog.business_id == current_user.business_id
-    ).order_by(AuditLog.id.desc()).limit(limit).all()
+    ).order_by(AuditLog.id.desc()).all()
 
-    return [
+    serialized = [
         {
             "id": l.id,
             "user_name": l.user_name,
@@ -41,10 +43,13 @@ def list_audit_logs(
         }
         for l in logs
     ]
+    return paginate_items(serialized, page=page, page_size=page_size)
 
 @router.get("/notifications")
 def list_notifications(
     unread_only: bool = False,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -52,8 +57,8 @@ def list_notifications(
     if unread_only:
         query = query.filter(Notification.is_read == False)
     
-    notifications = query.order_by(Notification.id.desc()).limit(20).all()
-    return [
+    notifications = query.order_by(Notification.id.desc()).all()
+    serialized = [
         {
             "id": n.id,
             "title": n.title,
@@ -65,6 +70,7 @@ def list_notifications(
         }
         for n in notifications
     ]
+    return paginate_items(serialized, page=page, page_size=page_size)
 
 @router.put("/notifications/{notification_id}/read")
 def mark_notification_read(

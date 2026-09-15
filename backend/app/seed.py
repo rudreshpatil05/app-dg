@@ -24,14 +24,14 @@ def seed_database():
 
     # 1. Business
     biz = Business(
-        name="Shree Ganesh Mobile & Electronics",
-        legal_name="Shree Ganesh Electronics Pvt Ltd",
+        name="DG Mobile and Electronics",
+        legal_name="DG Mobile and Electronics",
         gstin="27AABCS1429B1Z8",
         phone="9822012345",
         alternate_phone="02025531234",
         email="shreeganeshmobile.pune@gmail.com",
-        address="Shop No 12-14, Ground Floor, Shreeram Plaza, FC Road, Shivajinagar",
-        city="Pune",
+        address="Near ST Stand, Roha",
+        city="Roha",
         state="Maharashtra",
         state_code="27",
         pincode="411004",

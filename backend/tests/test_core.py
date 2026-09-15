@@ -1,9 +1,12 @@
 import socket
 import pytest
 import datetime
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.database import Base
+from app.main import app
+from app.utils.pagination import paginate_items
 from app.models import (
     Business, Role, User, Category, Product, SerialNumber, Customer,
     Account, ExpenseCategory, Expense
@@ -24,6 +27,46 @@ def test_get_available_port_skips_occupied_port():
 
     assert fallback_port != start_port
     occupied.close()
+
+
+def test_api_health_and_root_metadata():
+    client = TestClient(app)
+
+    root = client.get("/")
+    assert root.status_code == 200
+    root_data = root.json()
+    assert root_data["app"] == "DG-Retail OS"
+    assert root_data["api_base"] == "/api/v1"
+
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    health_data = health.json()
+    assert health_data["status"] == "healthy"
+    assert "db_connected" in health_data
+
+
+def test_paginate_items_returns_metadata():
+    items = list(range(1, 26))
+    payload = paginate_items(items, page=2, page_size=10)
+
+    assert payload["items"] == list(range(11, 21))
+    assert payload["pagination"]["page"] == 2
+    assert payload["pagination"]["page_size"] == 10
+    assert payload["pagination"]["total_items"] == 25
+    assert payload["pagination"]["total_pages"] == 3
+    assert payload["pagination"]["has_next"] is True
+    assert payload["pagination"]["has_prev"] is True
+
+
+def test_api_error_payloads_are_standardized():
+    client = TestClient(app)
+
+    response = client.get("/api/v1/does-not-exist")
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["success"] is False
+    assert payload["error"]["code"] == 404
+    assert "message" in payload["error"]
 
 
 @pytest.fixture
@@ -148,6 +191,59 @@ def test_pos_sale_rejects_already_sold_imei(test_db):
             payments_data=[{"payment_method": "CASH", "amount": 69999.0}]
         )
     assert "already SOLD" in str(exc.value)
+
+def test_pos_sale_supports_split_payments_and_rejects_overpayment(test_db):
+    biz = test_db.query(Business).first()
+    user = test_db.query(User).first()
+    prod = test_db.query(Product).first()
+    serial = test_db.query(SerialNumber).filter(SerialNumber.imei1 == "358921118234001").first()
+
+    sale = process_pos_sale(
+        db=test_db,
+        business_id=biz.id,
+        user_id=user.id,
+        user_name=user.full_name,
+        user_role="OWNER",
+        customer_data={"name": "Split Customer", "phone": "9999999999"},
+        items_data=[{
+            "product_id": prod.id,
+            "serial_number_id": serial.id,
+            "unit_price": 69999.0,
+            "quantity": 1,
+            "gst_rate": 18.0
+        }],
+        payments_data=[
+            {"payment_method": "CASH", "amount": 30000.0},
+            {"payment_method": "UPI", "amount": 39999.0, "reference_number": "UTR-1"}
+        ]
+    )
+
+    assert sale.payment_type == "SPLIT"
+    assert sale.paid_amount == 69999.0
+    assert len(sale.payments) == 2
+    assert {payment.payment_method for payment in sale.payments} == {"CASH", "UPI"}
+
+    serial.status = "IN_STOCK"
+    serial.sale_id = None
+    test_db.commit()
+
+    with pytest.raises(ValueError, match="cannot exceed bill amount"):
+        process_pos_sale(
+            db=test_db,
+            business_id=biz.id,
+            user_id=user.id,
+            user_name=user.full_name,
+            user_role="OWNER",
+            customer_data={"name": "Overpaid Customer", "phone": "8888888888"},
+            items_data=[{
+                "product_id": prod.id,
+                "serial_number_id": serial.id,
+                "unit_price": 69999.0,
+                "quantity": 1,
+                "gst_rate": 18.0
+            }],
+            payments_data=[{"payment_method": "CASH", "amount": 70000.0}]
+        )
 
 def test_emi_calculation_exact_reconciliation():
     details = calculate_emi_plan_details(

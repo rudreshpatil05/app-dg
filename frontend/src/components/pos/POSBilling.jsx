@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
 import { 
-  Search, Plus, Trash2, Smartphone, Receipt, User, 
+  Search, Plus, Trash2, Smartphone, Receipt, User, ShoppingCart,
   CreditCard, DollarSign, QrCode, MessageSquare, Printer, 
-  RefreshCw, CheckCircle, AlertCircle, X, Percent, Shield
+  RefreshCw, CheckCircle, AlertCircle, X, Percent, Shield, ArrowLeft
 } from 'lucide-react';
 
 export default function POSBilling() {
@@ -13,6 +13,8 @@ export default function POSBilling() {
   const [products, setProducts] = useState([]);
   const [availableSerials, setAvailableSerials] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProductCategory, setSelectedProductCategory] = useState('mobile');
+  const [selectedBrand, setSelectedBrand] = useState(null);
   const [cart, setCart] = useState([]);
   const [customer, setCustomer] = useState({ name: 'Walk-in Customer', phone: '', address: '', gstin: '' });
   const [savedCustomers, setSavedCustomers] = useState([]);
@@ -56,11 +58,11 @@ export default function POSBilling() {
   const loadData = async () => {
     try {
       const prods = await api.getProducts();
-      setProducts(prods);
+      setProducts(Array.isArray(prods) ? prods : (prods.items || []));
       const serials = await api.getSerialNumbers({ status: 'IN_STOCK' });
-      setAvailableSerials(serials);
+      setAvailableSerials(Array.isArray(serials) ? serials : (serials.items || []));
       const custs = await api.getCustomers();
-      setSavedCustomers(custs);
+      setSavedCustomers(Array.isArray(custs) ? custs : (custs.items || []));
     } catch (err) {
       console.error(err);
     }
@@ -129,13 +131,55 @@ export default function POSBilling() {
   const grandTotal = Math.max(0, cartSubtotal - totalDiscount);
   const exchangeDeduction = exchangeDevice ? Number(exchangeDevice.final_exchange_value || 0) : 0;
   const finalPayable = Math.max(0, grandTotal - exchangeDeduction);
+  const totalPaid = paymentSplits.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) || 0), 0);
+  const remainingDue = Math.max(0, finalPayable - totalPaid);
+  const paymentMethods = [
+    { id: 'CASH', label: 'Cash', icon: DollarSign },
+    { id: 'UPI', label: 'UPI', icon: QrCode },
+    { id: 'CARD', label: 'Card', icon: CreditCard },
+    { id: 'BANK', label: 'Bank Transfer', icon: RefreshCw },
+    { id: 'CREDIT', label: 'Credit / Due', icon: User },
+    { id: 'EMI', label: 'Store EMI', icon: Percent }
+  ];
 
-  // Auto-sync payment split with finalPayable
+  // Keep a single payment row synced with the bill; preserve explicit split rows.
   useEffect(() => {
     if (!isEmiSelected) {
-      setPaymentSplits([{ payment_method: selectedPrimaryMethod, amount: finalPayable, reference_number: '' }]);
+      setPaymentSplits((current) => current.length === 1
+        ? [{ ...current[0], payment_method: selectedPrimaryMethod, amount: finalPayable }]
+        : current);
     }
   }, [finalPayable, selectedPrimaryMethod, isEmiSelected]);
+
+  const updatePaymentSplit = (index, changes) => {
+    setPaymentSplits((current) => current.map((payment, paymentIndex) => {
+      if (paymentIndex !== index) return payment;
+      if (changes.amount === undefined) return { ...payment, ...changes };
+
+      const otherPayments = current.reduce(
+        (sum, item, itemIndex) => itemIndex === index ? sum : sum + Math.max(0, Number(item.amount) || 0),
+        0
+      );
+      const maxAllowed = Math.max(0, finalPayable - otherPayments);
+      return { ...payment, ...changes, amount: Math.min(maxAllowed, Math.max(0, Number(changes.amount) || 0)) };
+    }));
+  };
+
+  const addPaymentSplit = () => {
+    if (remainingDue <= 0.01) {
+      showToast('The bill is already fully paid.', 'error');
+      return;
+    }
+    setPaymentSplits((current) => [
+      ...current,
+      { payment_method: 'UPI', amount: remainingDue, reference_number: '' }
+    ]);
+  };
+
+  const removePaymentSplit = (index) => {
+    if (paymentSplits.length === 1) return;
+    setPaymentSplits((current) => current.filter((_, paymentIndex) => paymentIndex !== index));
+  };
 
   const handleApplyExchange = () => {
     if (Number(exchangeForm.final_exchange_value) <= 0) {
@@ -155,6 +199,11 @@ export default function POSBilling() {
 
     if (!customer.phone || customer.phone.length < 10) {
       showToast('Please enter a 10-digit customer mobile number for invoice & warranty record.', 'error');
+      return;
+    }
+
+    if (totalPaid > finalPayable + 0.01) {
+      showToast('Total paid cannot exceed the bill amount.', 'error');
       return;
     }
 
@@ -220,11 +269,49 @@ export default function POSBilling() {
     }
   };
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.brand.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(searchQuery))
-  );
+  const productCategoryOptions = [
+    {
+      id: 'mobile',
+      label: '📱 Mobile Phones',
+      matcher: (p) => {
+        const category = `${p.category_name || ''} ${p.category_slug || ''}`.toLowerCase().replace(/[-_]/g, ' ');
+        const productType = `${p.name || ''} ${p.model || ''}`.toLowerCase();
+        return /(^|[^a-z])(smartphones?|mobile phones?)([^a-z]|$)/i.test(category)
+          || (!category && /iphone|smartphone|mobile phone/i.test(productType));
+      }
+    },
+    {
+      id: 'accessories',
+      label: '📦 Inventory & Accessories',
+      matcher: (p) => {
+        const category = `${p.category_name || ''} ${p.category_slug || ''}`.toLowerCase().replace(/[-_]/g, ' ');
+        const productType = `${p.name || ''} ${p.model || ''}`.toLowerCase();
+        return /accessor|earbuds?|audio|charger|cables?|covers?|protection|power banks?|smart watches?/i.test(category)
+          || (!category && /accessor|earbuds?|headphones?|charger|cables?|case|cover|power ?bank|smartwatch|watch|speaker|headset/i.test(productType));
+      }
+    },
+    {
+      id: 'other',
+      label: '🔧 Other Products',
+      matcher: (p) => {
+        const mobileCategory = productCategoryOptions[0].matcher(p);
+        const accessoryCategory = productCategoryOptions[1].matcher(p);
+        return !mobileCategory && !accessoryCategory;
+      }
+    }
+  ];
+
+  const currentCategory = productCategoryOptions.find((item) => item.id === selectedProductCategory) || productCategoryOptions[0];
+
+  const categoryProducts = products.filter((p) => currentCategory.matcher(p));
+  const brandOptions = [...new Set(categoryProducts.map((p) => p.brand).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const visibleBrands = brandOptions.filter((brand) => !normalizedSearch || brand.toLowerCase().includes(normalizedSearch));
+  const filteredProducts = categoryProducts.filter((p) => {
+    const brandMatch = selectedBrand && String(p.brand).toLowerCase() === selectedBrand.toLowerCase();
+    const searchMatch = !normalizedSearch || [p.name, p.brand, p.model, p.barcode, p.category_name].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedSearch));
+    return brandMatch && searchMatch;
+  }).sort((a, b) => `${a.name || ''} ${a.model || ''}`.localeCompare(`${b.name || ''} ${b.model || ''}`, undefined, { sensitivity: 'base' }));
 
   return (
     <div className="p-4 lg:p-6 space-y-5">
@@ -233,7 +320,7 @@ export default function POSBilling() {
         <div>
           <h2 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2">
             <ShoppingCart className="w-5 h-5 text-emerald-600" />
-            Counter POS Billing Terminal
+            Sell / Counter POS Billing
           </h2>
           <p className="text-xs text-slate-500">Fast IMEI scanning, mixed split payments, exchange buyback, and GST billing</p>
         </div>
@@ -265,55 +352,128 @@ export default function POSBilling() {
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
             {/* Search Input */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search smartphone model, accessories, brand, or barcode..."
-                className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-emerald-500 outline-none"
-              />
-            </div>
-
-            {/* Product Quick Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
-              {filteredProducts.map((p) => {
-                const inStockSerials = availableSerials.filter(s => s.product_id === p.id);
-                const isOutOfStock = p.is_serialized ? inStockSerials.length === 0 : p.current_stock <= 0;
-
-                return (
-                  <div
-                    key={p.id}
-                    onClick={() => !isOutOfStock && addToCart(p)}
-                    className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
-                      isOutOfStock
-                        ? 'bg-slate-50/60 border-slate-200 opacity-60 cursor-not-allowed'
-                        : 'bg-white hover:bg-emerald-50/40 hover:border-emerald-400 border-slate-200 hover:shadow-xs'
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {productCategoryOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() => {
+                      setSelectedProductCategory(option.id);
+                      setSelectedBrand(null);
+                      setSearchQuery('');
+                    }}
+                    className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                      selectedProductCategory === option.id
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-slate-50'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{p.brand}</span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          isOutOfStock ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                        }`}>
-                          {p.is_serialized ? `${inStockSerials.length} IMEI` : `${p.current_stock} pcs`}
-                        </span>
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-800 line-clamp-2 mt-1">{p.name}</h4>
+                    <div className="text-sm font-bold">{option.label}</div>
+                    <div className="text-[10px] mt-1 opacity-75">
+                      {products.filter((p) => option.matcher(p)).length} models
                     </div>
+                  </button>
+                ))}
+              </div>
 
-                    <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
-                      <span className="text-xs font-bold text-emerald-600 font-display">
-                        {formatINR(p.selling_price)}
-                      </span>
-                      <Plus className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600" />
-                    </div>
-                  </div>
-                );
-              })}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={selectedBrand ? `Search ${selectedBrand} products or models...` : `Search ${currentCategory.label.toLowerCase()} brands...`}
+                  className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-emerald-500 outline-none"
+                />
+              </div>
             </div>
+
+            {!selectedBrand ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
+                {visibleBrands.length === 0 ? (
+                  <div className="col-span-full rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-xs text-slate-500">
+                    No brands or products are available in this category.
+                  </div>
+                ) : (
+                  visibleBrands.map((brand) => {
+                    const brandProductCount = categoryProducts.filter((p) => p.brand === brand).length;
+                    return (
+                      <button
+                        key={brand}
+                        onClick={() => {
+                          setSelectedBrand(brand);
+                          setSearchQuery('');
+                        }}
+                        className="p-4 rounded-xl border border-slate-200 bg-white hover:bg-emerald-50/40 hover:border-emerald-400 hover:shadow-xs text-left transition-all"
+                      >
+                        <span className="text-sm font-bold text-slate-800">{brand}</span>
+                        <span className="block text-[10px] text-slate-500 mt-1">
+                          {brandProductCount} {brandProductCount === 1 ? 'model' : 'models'}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  onClick={() => {
+                    setSelectedBrand(null);
+                    setSearchQuery('');
+                  }}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-emerald-700"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  Back to {currentCategory.label.replace(/^\S+\s/, '')} brands
+                </button>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[400px] overflow-y-auto pr-1">
+                  {filteredProducts.length === 0 ? (
+                    <div className="col-span-full rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-xs text-slate-500">
+                      No products found for {selectedBrand}. Try another search or go back to brands.
+                    </div>
+                  ) : filteredProducts.map((p) => {
+                  const inStockSerials = availableSerials.filter(s => s.product_id === p.id);
+                  const availableCount = p.is_serialized ? inStockSerials.length : Number(p.current_stock || 0);
+                  const isOutOfStock = p.is_serialized ? availableCount === 0 : availableCount <= 0;
+
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => !isOutOfStock && addToCart(p)}
+                      className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                        isOutOfStock
+                          ? 'bg-slate-50/60 border-slate-200 opacity-60 cursor-not-allowed'
+                          : 'bg-white hover:bg-emerald-50/40 hover:border-emerald-400 border-slate-200 hover:shadow-xs'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{p.brand}</span>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            isOutOfStock ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {p.is_serialized ? `${availableCount} IMEI` : `${availableCount} pcs`}
+                          </span>
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-800 mt-1 min-h-[32px]">{p.name}</h4>
+                        {p.model && <p className="text-[10px] text-slate-500 mt-0.5">Model: {p.model}</p>}
+                      </div>
+
+                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-bold text-emerald-600 font-display">{formatINR(p.selling_price)}</div>
+                          <div className="text-[10px] text-slate-500">Stock: {availableCount}</div>
+                        </div>
+                        <Plus className="w-3.5 h-3.5 text-slate-400" />
+                      </div>
+                    </div>
+                  );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick Available Serial Numbers (Mobiles) Grid */}
@@ -472,19 +632,22 @@ export default function POSBilling() {
 
             {/* Payment Method Selector */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-700 block">Payment Method</label>
-              <div className="grid grid-cols-4 gap-1.5">
-                {[
-                  { id: 'CASH', label: 'Cash', icon: DollarSign },
-                  { id: 'UPI', label: 'UPI / QR', icon: QrCode },
-                  { id: 'CARD', label: 'Card', icon: CreditCard },
-                  { id: 'EMI', label: 'Store EMI', icon: Percent },
-                ].map((m) => (
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 block">Payment Method</label>
+                <button type="button" onClick={addPaymentSplit} className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800">
+                  + Add payment method
+                </button>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                {paymentMethods.map((m) => (
                   <button
                     key={m.id}
                     onClick={() => {
                       setSelectedPrimaryMethod(m.id);
                       setIsEmiSelected(m.id === 'EMI');
+                      if (paymentSplits.length === 1) {
+                        setPaymentSplits([{ ...paymentSplits[0], payment_method: m.id }]);
+                      }
                     }}
                     className={`py-2 px-1.5 rounded-xl border text-xs font-bold flex flex-col items-center gap-1 transition-all ${
                       (isEmiSelected ? m.id === 'EMI' : selectedPrimaryMethod === m.id)
@@ -496,6 +659,33 @@ export default function POSBilling() {
                     <span>{m.label}</span>
                   </button>
                 ))}
+              </div>
+
+              <div className="space-y-2">
+                {paymentSplits.map((payment, index) => (
+                  <div key={`${payment.payment_method}-${index}`} className="grid grid-cols-[1fr_92px_28px] gap-2 items-end bg-white border border-slate-200 rounded-xl p-2">
+                    <div>
+                      <label className="text-[10px] text-slate-500">Method {index + 1}</label>
+                      <select value={payment.payment_method} onChange={(e) => updatePaymentSplit(index, { payment_method: e.target.value })} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-xs font-semibold">
+                        {paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.label}</option>)}
+                      </select>
+                      <input type="text" value={payment.reference_number || ''} onChange={(e) => updatePaymentSplit(index, { reference_number: e.target.value })} placeholder="Reference / UTR (optional)" className="w-full mt-1 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[10px] outline-none focus:border-emerald-500" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500">Amount</label>
+                      <input type="number" min="0" max={finalPayable} value={payment.amount} onChange={(e) => updatePaymentSplit(index, { amount: e.target.value })} className="w-full mt-1 bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-right outline-none focus:border-emerald-500" />
+                    </div>
+                    <button type="button" onClick={() => removePaymentSplit(index)} disabled={paymentSplits.length === 1} className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-30" title="Remove payment">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-xs bg-slate-50 rounded-xl border border-slate-200 p-2.5">
+                <div><span className="block text-[10px] text-slate-500">Total Amount</span><strong>{formatINR(finalPayable)}</strong></div>
+                <div><span className="block text-[10px] text-slate-500">Amount Paid</span><strong className="text-emerald-700">{formatINR(totalPaid)}</strong></div>
+                <div><span className="block text-[10px] text-slate-500">Remaining / Due</span><strong className={remainingDue > 0.01 ? 'text-rose-600' : 'text-emerald-700'}>{formatINR(remainingDue)}</strong></div>
               </div>
             </div>
 
@@ -763,6 +953,17 @@ export default function POSBilling() {
                       <span>Paid ({completedSale.payment_type}):</span>
                       <span>{formatINR(completedSale.paid_amount)}</span>
                     </div>
+                    {completedSale.payments?.length > 0 && (
+                      <div className="pt-1 text-[9px] text-slate-600">
+                        <div className="font-bold">Payment Breakdown:</div>
+                        {completedSale.payments.map((payment) => (
+                          <div key={payment.id} className="flex justify-between">
+                            <span>{payment.payment_method}{payment.reference_number ? ` (${payment.reference_number})` : ''}</span>
+                            <span>{formatINR(payment.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {completedSale.balance_due > 0 && (
                       <div className="flex justify-between font-bold text-rose-600">
                         <span>Balance Due:</span>
@@ -812,6 +1013,9 @@ export default function POSBilling() {
                       <p className="font-bold text-slate-700">Payment Summary:</p>
                       <p>Mode: <span className="font-semibold">{completedSale.payment_type}</span></p>
                       <p>Status: <span className="font-bold text-emerald-700">{completedSale.payment_status}</span></p>
+                      <p>Total: <span className="font-semibold">{formatINR(completedSale.final_payable)}</span></p>
+                      <p>Paid: <span className="font-semibold text-emerald-700">{formatINR(completedSale.paid_amount)}</span></p>
+                      <p>Due: <span className="font-semibold text-rose-600">{formatINR(completedSale.balance_due)}</span></p>
                     </div>
                   </div>
 
@@ -856,6 +1060,17 @@ export default function POSBilling() {
                       <div className="flex justify-between font-bold text-sm text-slate-900 pt-1 border-t">
                         <span>Invoice Total:</span>
                         <span className="text-emerald-700 font-display">{formatINR(completedSale.final_payable)}</span>
+                      </div>
+                      <div className="pt-2 mt-1 border-t border-dashed border-slate-300 text-left">
+                        <div className="font-bold">Payment Breakdown</div>
+                        {completedSale.payments?.map((payment) => (
+                          <div key={payment.id} className="flex justify-between">
+                            <span>{payment.payment_method}{payment.reference_number ? ` (${payment.reference_number})` : ''}</span>
+                            <span>{formatINR(payment.amount)}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-semibold"><span>Amount Paid:</span><span>{formatINR(completedSale.paid_amount)}</span></div>
+                        <div className="flex justify-between font-semibold text-rose-600"><span>Remaining / Due:</span><span>{formatINR(completedSale.balance_due)}</span></div>
                       </div>
                     </div>
                   </div>

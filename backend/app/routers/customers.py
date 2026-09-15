@@ -10,13 +10,16 @@ from app.models.finance import Account, AccountTransaction
 from app.schemas.party import CustomerResponse, CustomerCreate, CustomerLedgerResponse, ReceivePaymentRequest
 from app.services.whatsapp_service import generate_customer_statement_whatsapp_link
 from app.auth import get_current_user
+from app.utils.pagination import paginate_items
 
 router = APIRouter(prefix="/customers", tags=["Customers & Khatabook Ledger"])
 
-@router.get("", response_model=List[CustomerResponse])
+@router.get("")
 def list_customers(
     search: Optional[str] = None,
     balance_filter: Optional[str] = None, # "OWES_MONEY", "ALL"
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -30,7 +33,8 @@ def list_customers(
         query = query.filter(Customer.current_balance > 0)
 
     customers = query.order_by(Customer.current_balance.desc(), Customer.name.asc()).all()
-    return [CustomerResponse.model_validate(c) for c in customers]
+    serialized = [CustomerResponse.model_validate(c) for c in customers]
+    return paginate_items(serialized, page=page, page_size=page_size)
 
 @router.post("", response_model=CustomerResponse)
 def create_customer(

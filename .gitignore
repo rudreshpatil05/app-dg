@@ -1,36 +1,64 @@
+@"
+# =========================
 # Python
+# =========================
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv/
-backend/.server-port
 venv/
 env/
+ENV/
 
-# Environment variables
+# =========================
+# Environment / Secrets
+# =========================
 .env
 .env.*
-.dev_secret_key
+!.env.example
 
-# SQLite databases
+.dev_secret_key
+.server-port
+
+# =========================
+# Databases
+# =========================
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
 
-# Node
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# Node / React
+# =========================
 node_modules/
-frontend/node_modules/
-
-# Build
-dist/
 frontend/dist/
+dist/
 
-# IDE
+# =========================
+# IDE / OS
+# =========================
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+*.bak
+"@ | Set-Content .gitignore

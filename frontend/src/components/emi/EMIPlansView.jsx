@@ -13,6 +13,10 @@ export default function EMIPlansView() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [emiStats, setEmiStats] = useState(null);
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [pendingFilter, setPendingFilter] = useState('ALL');
+  const [pendingSearch, setPendingSearch] = useState('');
+  const [pendingStartDate, setPendingStartDate] = useState('');
+  const [pendingEndDate, setPendingEndDate] = useState('');
   const [showCollectModal, setShowCollectModal] = useState(false);
   const [targetInstallment, setTargetInstallment] = useState(null);
   const [collectAmount, setCollectAmount] = useState('');
@@ -28,7 +32,7 @@ export default function EMIPlansView() {
     setLoading(true);
     try {
       const [plansData, statsData] = await Promise.all([
-        api.getEmiPlans({ status_filter: statusFilter !== 'ALL' ? statusFilter : undefined }),
+        api.getEmiPlans(statusFilter === 'ALL' ? {} : { status_filter: statusFilter }),
         api.getEmiDashboard()
       ]);
       setPlans(plansData);
@@ -47,10 +51,30 @@ export default function EMIPlansView() {
     try {
       const fullPlan = await api.getEmiPlanDetails(plan.id);
       setSelectedPlan(fullPlan);
+      return fullPlan;
     } catch (err) {
       console.error(err);
+      return null;
     }
   };
+
+  const collectFromTrackingRow = async (planId, installmentId = null) => {
+    const fullPlan = await selectPlan({ id: planId });
+    const installment = fullPlan?.installments?.find((item) => item.id === installmentId) || null;
+    if (fullPlan) openCollectDialog(installment);
+  };
+
+  const filteredPendingPlans = (emiStats?.pending_plans || []).filter((plan) => {
+    const matchesFilter = pendingFilter === 'ALL' ||
+      (pendingFilter === 'DUE_TODAY' && plan.days_to_due === 0) ||
+      (pendingFilter === 'OVERDUE' && plan.days_to_due < 0) ||
+      (pendingFilter === 'UPCOMING' && plan.days_to_due > 0);
+    const search = pendingSearch.trim().toLowerCase();
+    const matchesSearch = !search || `${plan.customer_name} ${plan.customer_phone} ${plan.product_name}`.toLowerCase().includes(search);
+    const matchesStart = !pendingStartDate || !plan.next_due_date || plan.next_due_date >= pendingStartDate;
+    const matchesEnd = !pendingEndDate || !plan.next_due_date || plan.next_due_date <= pendingEndDate;
+    return matchesFilter && matchesSearch && matchesStart && matchesEnd;
+  });
 
   const openCollectDialog = (inst = null) => {
     setTargetInstallment(inst);
@@ -128,14 +152,22 @@ export default function EMIPlansView() {
 
       {/* EMI Stats Row */}
       {emiStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Active EMI Plans</span>
-            <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">{emiStats.active_plans_count}</p>
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Active Customers</span>
+            <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">{emiStats.total_active_customers}</p>
           </div>
           <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Receivable</span>
-            <p className="text-xl font-extrabold text-indigo-900 font-display mt-0.5">{formatINR(emiStats.total_emi_receivable)}</p>
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total EMI Amount</span>
+            <p className="text-xl font-extrabold text-indigo-900 font-display mt-0.5">{formatINR(emiStats.total_emi_amount)}</p>
+          </div>
+          <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Collected</span>
+            <p className="text-xl font-extrabold text-emerald-700 font-display mt-0.5">{formatINR(emiStats.total_collected)}</p>
+          </div>
+          <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Remaining</span>
+            <p className="text-xl font-extrabold text-indigo-900 font-display mt-0.5">{formatINR(emiStats.total_remaining)}</p>
           </div>
           <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Due Today</span>
@@ -145,6 +177,71 @@ export default function EMIPlansView() {
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Overdue Dues</span>
             <p className="text-xl font-extrabold text-rose-600 font-display mt-0.5">{formatINR(emiStats.overdue_amount)}</p>
           </div>
+          <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Upcoming EMIs</span>
+            <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">{emiStats.upcoming_count}</p>
+          </div>
+        </div>
+      )}
+
+      {emiStats && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-200 bg-amber-50/60 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">EMIs Due Today - {formatDate(emiStats.today)}</h3>
+                <p className="text-[11px] text-slate-500">{emiStats.due_today_count} installment(s) requiring collection</p>
+              </div>
+              <Calendar className="w-4 h-4 text-amber-600" />
+            </div>
+            <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+              {emiStats.due_today_items?.length ? emiStats.due_today_items.map((item) => (
+                <div key={item.installment_id} className="p-3 flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 truncate">{item.customer_name} <span className="font-normal text-slate-500">({item.customer_phone})</span></p>
+                    <p className="text-[11px] text-slate-500 truncate">{item.product_name} · Installment #{item.installment_number} · {formatDate(item.due_date)}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-bold text-amber-700">{formatINR(item.amount)}</span>
+                    <button onClick={() => collectFromTrackingRow(item.plan_id, item.installment_id)} className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-bold">Collect</button>
+                  </div>
+                </div>
+              )) : <p className="p-6 text-center text-xs text-slate-400">No EMI installments are due today.</p>}
+            </div>
+          </section>
+
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-200 bg-slate-50/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Pending EMIs</h3>
+                  <p className="text-[11px] text-slate-500">Customer-level balances and next due dates</p>
+                </div>
+                <select value={pendingFilter} onChange={(e) => setPendingFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white font-semibold">
+                  <option value="ALL">All Pending</option><option value="DUE_TODAY">Due Today</option><option value="OVERDUE">Overdue</option><option value="UPCOMING">Upcoming</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input value={pendingSearch} onChange={(e) => setPendingSearch(e.target.value)} placeholder="Search customer or product" className="sm:col-span-1 text-xs border border-slate-200 rounded-lg px-2.5 py-1.5" />
+                <input type="date" value={pendingStartDate} onChange={(e) => setPendingStartDate(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5" />
+                <input type="date" value={pendingEndDate} onChange={(e) => setPendingEndDate(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5" />
+              </div>
+            </div>
+            <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+              {filteredPendingPlans.length ? filteredPendingPlans.map((plan) => (
+                <div key={plan.id} className="p-3 flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 truncate">{plan.customer_name} <span className="font-normal text-slate-500">({plan.customer_phone})</span></p>
+                    <p className="text-[11px] text-slate-500 truncate">{plan.product_name} · {plan.paid_installments} paid / {plan.remaining_installments} remaining · Next: {plan.next_due_date ? formatDate(plan.next_due_date) : 'Complete'}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-bold text-slate-900">{formatINR(plan.balance_remaining)}</p>
+                    <p className={`text-[10px] font-semibold ${plan.days_to_due < 0 ? 'text-rose-600' : plan.days_to_due === 0 ? 'text-amber-600' : 'text-slate-500'}`}>{plan.days_to_due < 0 ? `${Math.abs(plan.days_to_due)} days overdue` : plan.days_to_due === 0 ? 'Due today' : `${plan.days_to_due} days upcoming`}</p>
+                  </div>
+                </div>
+              )) : <p className="p-6 text-center text-xs text-slate-400">No pending EMI plans match the selected filters.</p>}
+            </div>
+          </section>
         </div>
       )}
 
@@ -246,6 +343,7 @@ export default function EMIPlansView() {
                   {selectedPlan.installments?.map((inst) => {
                     const isPaid = inst.status === 'PAID';
                     const isOverdue = inst.status === 'OVERDUE';
+                    const latestPayment = inst.payments?.[inst.payments.length - 1];
 
                     return (
                       <div
@@ -265,7 +363,7 @@ export default function EMIPlansView() {
                               Due Date: {formatDate(inst.due_date)}
                             </p>
                             <p className="text-[11px] text-slate-500">
-                              {isPaid ? `Paid on ${formatDate(inst.paid_date)}` : `Amount Due: ${formatINR(inst.balance_due)}`}
+                              {isPaid ? `Paid on ${formatDate(inst.paid_date)}${latestPayment ? ` · ${formatINR(latestPayment.amount)} via ${latestPayment.payment_method}` : ''}` : `Paid: ${formatINR(inst.paid_amount)} · Amount Due: ${formatINR(inst.balance_due)}`}
                             </p>
                           </div>
                         </div>

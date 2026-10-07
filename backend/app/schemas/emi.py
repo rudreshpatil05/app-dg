@@ -2,6 +2,15 @@ from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
 import datetime
 
+class EmiPaymentResponse(BaseModel):
+    id: int
+    payment_date: datetime.date
+    amount: float
+    payment_method: str
+    reference_number: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class EmiInstallmentResponse(BaseModel):
     id: int
     installment_number: int
@@ -12,6 +21,7 @@ class EmiInstallmentResponse(BaseModel):
     paid_date: Optional[datetime.date] = None
     status: str # PENDING, PAID, PARTIAL, OVERDUE, WAIVED
     notes: Optional[str] = None
+    payments: List[EmiPaymentResponse] = []
     model_config = ConfigDict(from_attributes=True)
 
 class EmiPlanResponse(BaseModel):
@@ -36,6 +46,11 @@ class EmiPlanResponse(BaseModel):
     total_paid: float
     balance_remaining: float
     status: str
+    paid_installments: int = 0
+    remaining_installments: int = 0
+    next_due_date: Optional[datetime.date] = None
+    next_due_amount: float = 0.0
+    days_to_due: Optional[int] = None
     installments: List[EmiInstallmentResponse] = []
     whatsapp_link: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)

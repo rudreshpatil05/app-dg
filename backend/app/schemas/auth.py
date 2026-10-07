@@ -18,10 +18,31 @@ class BusinessBase(BaseModel):
     invoice_prefix: str = "INV"
     thermal_printer_width: str = "80mm"
     terms_and_conditions: Optional[str] = None
+    is_active: bool = True
 
 class BusinessResponse(BusinessBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+class BusinessUpdate(BaseModel):
+    name: Optional[str] = None
+    legal_name: Optional[str] = None
+    gstin: Optional[str] = None
+    phone: Optional[str] = None
+    alternate_phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    state_code: Optional[str] = None
+    pincode: Optional[str] = None
+    logo_url: Optional[str] = None
+    upi_id: Optional[str] = None
+    invoice_prefix: Optional[str] = None
+    thermal_printer_width: Optional[str] = None
+    terms_and_conditions: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
 
 class UserBase(BaseModel):
     username: str

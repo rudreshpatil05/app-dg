@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 import datetime
 
 class CartItemInput(BaseModel):
@@ -9,11 +9,11 @@ class CartItemInput(BaseModel):
     imei1: Optional[str] = None
     imei2: Optional[str] = None
     serial_number: Optional[str] = None
-    quantity: int = 1
-    unit_price: float
+    quantity: int = Field(default=1, ge=1)
+    unit_price: float = Field(ge=0)
     unit_mrp: Optional[float] = None
-    discount: float = 0.0
-    gst_rate: float = 18.0
+    discount: float = Field(default=0.0, ge=0)
+    gst_rate: float = Field(default=18.0, ge=0, le=100)
 
 class ExchangeInput(BaseModel):
     brand: str
@@ -32,19 +32,20 @@ class ExchangeInput(BaseModel):
 
 class PaymentSplitInput(BaseModel):
     payment_method: str # CASH, UPI, CARD, BANK, CREDIT, EMI
-    amount: float
+    amount: float = Field(ge=0)
     reference_number: Optional[str] = None
 
 class EmiInput(BaseModel):
-    number_of_installments: int = 6
-    interest_rate: float = 0.0
-    processing_fee: float = 0.0
+    number_of_installments: int = Field(default=6, ge=1, le=60)
+    interest_rate: float = Field(default=0.0, ge=0, le=100)
+    processing_fee: float = Field(default=0.0, ge=0)
+    finance_provider: Optional[str] = None
     notes: Optional[str] = None
 
 class PosSaleRequest(BaseModel):
     customer: dict # {"name": "...", "phone": "...", "address": "...", "gstin": "..."}
     items: List[CartItemInput]
-    discount_amount: float = 0.0
+    discount_amount: float = Field(default=0.0, ge=0)
     is_gst_invoice: bool = True
     exchange_device: Optional[ExchangeInput] = None
     payments: List[PaymentSplitInput]
@@ -110,5 +111,9 @@ class SaleResponse(BaseModel):
     notes: Optional[str] = None
     items: List[SaleItemResponse] = []
     payments: List[SalePaymentResponse] = []
+    emi_amount: Optional[float] = None
+    emi_duration: Optional[int] = None
+    emi_down_payment: Optional[float] = None
+    emi_total_repayable: Optional[float] = None
     whatsapp_link: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)

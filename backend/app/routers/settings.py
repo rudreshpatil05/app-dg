@@ -9,7 +9,7 @@ from app.models.product import Product, SerialNumber
 from app.models.party import Customer, Supplier
 from app.models.finance import Expense, Account
 from app.models.emi import EmiPlan
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/settings", tags=["Settings, Audit Logs & Backups"])
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/settings", tags=["Settings, Audit Logs & Backups"])
 def list_audit_logs(
     limit: int = 50,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["OWNER"]))
 ):
     if current_user.role and current_user.role.code == "STAFF":
         raise HTTPException(status_code=403, detail="Staff members cannot view system audit logs.")
@@ -84,14 +84,11 @@ def mark_notification_read(
 @router.get("/backup/export-json")
 def full_backup_export(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["OWNER"]))
 ):
     """
     Exports complete business database snapshot in portable JSON format for offline backup.
     """
-    if current_user.role and current_user.role.code != "OWNER":
-        raise HTTPException(status_code=403, detail="Only the Store Owner can export full business backup.")
-
     biz_id = current_user.business_id
     biz = db.query(Business).filter(Business.id == biz_id).first()
     products = db.query(Product).filter(Product.business_id == biz_id).all()

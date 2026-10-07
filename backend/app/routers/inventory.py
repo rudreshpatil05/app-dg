@@ -5,13 +5,15 @@ from sqlalchemy import or_
 from app.database import get_db
 from app.models.auth import User
 from app.models.product import Category, Product, ProductVariant, SerialNumber, StockMovement
+from app.models.purchase import Purchase
+from app.models.party import Supplier
 from app.schemas.product import (
     CategoryResponse, CategoryCreate, ProductResponse, ProductCreate,
     SerialNumberResponse, SerialNumberCreate
 )
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/inventory", tags=["Inventory & IMEI Tracking"])
+router = APIRouter(prefix="/inventory", tags=["Inventory & IMEI Tracking"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "STAFF"]))])
 
 @router.get("/categories", response_model=List[CategoryResponse])
 def list_categories(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -21,7 +23,11 @@ def list_categories(db: Session = Depends(get_db), current_user: User = Depends(
     ).all()
 
 @router.post("/categories", response_model=CategoryResponse)
-def create_category(cat: CategoryCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_category(
+    cat: CategoryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["OWNER", "MANAGER"]))
+):
     c_obj = Category(business_id=current_user.business_id, **cat.model_dump())
     db.add(c_obj)
     db.commit()
@@ -76,7 +82,7 @@ def list_products(
 def create_product(
     prod_in: ProductCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["OWNER", "MANAGER"]))
 ):
     data = prod_in.model_dump()
     initial_stock = data.pop("initial_stock", 0)
@@ -182,14 +188,25 @@ def search_imei_or_barcode(
     ).first()
 
     if serial:
+        product = serial.product
+        purchase = db.query(Purchase).filter(
+            Purchase.id == serial.purchase_id,
+            Purchase.business_id == current_user.business_id
+        ).first() if serial.purchase_id else None
+        supplier = db.query(Supplier).filter(
+            Supplier.id == serial.supplier_id,
+            Supplier.business_id == current_user.business_id
+        ).first() if serial.supplier_id else None
         return {
             "type": "SERIAL_DEVICE",
             "found": True,
             "serial_id": serial.id,
             "product_id": serial.product_id,
-            "product_name": serial.product.name,
-            "brand": serial.product.brand,
-            "model": serial.product.model,
+            "product_name": product.name,
+            "brand": product.brand,
+            "model": product.model,
+            "sku": product.sku,
+            "barcode": product.barcode,
             "color": serial.color,
             "ram": serial.ram,
             "storage": serial.storage,
@@ -197,9 +214,13 @@ def search_imei_or_barcode(
             "imei2": serial.imei2,
             "serial_number": serial.serial_number,
             "selling_price": serial.selling_price or serial.product.selling_price,
-            "mrp": serial.product.mrp,
-            "gst_rate": serial.product.gst_rate,
-            "hsn_code": serial.product.hsn_code,
+            "mrp": product.mrp,
+            "gst_rate": product.gst_rate,
+            "hsn_code": product.hsn_code,
+            "current_stock": product.current_stock,
+            "warranty_months": product.warranty_months,
+            "purchase_date": purchase.invoice_date if purchase else None,
+            "supplier": supplier.name if supplier else None,
             "status": serial.status,
             "is_available": serial.status == "IN_STOCK",
             "purchase_cost": 0.0 if is_staff else serial.purchase_cost
@@ -220,6 +241,8 @@ def search_imei_or_barcode(
             "product_name": prod.name,
             "brand": prod.brand,
             "model": prod.model,
+            "sku": prod.sku,
+            "barcode": prod.barcode,
             "selling_price": prod.selling_price,
             "mrp": prod.mrp,
             "gst_rate": prod.gst_rate,
@@ -227,6 +250,9 @@ def search_imei_or_barcode(
             "current_stock": prod.current_stock,
             "is_serialized": prod.is_serialized,
             "is_available": prod.current_stock > 0,
+            "warranty_months": prod.warranty_months,
+            "purchase_date": None,
+            "supplier": None,
             "purchase_cost": 0.0 if is_staff else prod.purchase_cost
         }
 
@@ -237,7 +263,7 @@ def update_serial_status(
     serial_id: int,
     status_update: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["OWNER", "MANAGER"]))
 ):
     new_status = status_update.get("status", "").upper()
     valid_statuses = ["IN_STOCK", "RESERVED", "SOLD", "RETURNED", "DAMAGED", "UNDER_REPAIR", "TRANSFERRED"]

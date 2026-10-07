@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 import datetime
 
 class ExpenseCategoryBase(BaseModel):
@@ -14,13 +14,13 @@ class ExpenseCategoryResponse(ExpenseCategoryBase):
 
 class ExpenseCreate(BaseModel):
     category_id: int
-    amount: float
+    amount: float = Field(gt=0)
     expense_date: datetime.date
     payment_method: str = "CASH" # CASH, UPI, BANK, CARD
     vendor: Optional[str] = None
     gstin: Optional[str] = None
     is_gst_applicable: bool = False
-    gst_amount: float = 0.0
+    gst_amount: float = Field(default=0.0, ge=0)
     notes: Optional[str] = None
 
 class ExpenseResponse(BaseModel):
@@ -56,7 +56,7 @@ class AccountResponse(AccountBase):
 
 class CashReconciliationRequest(BaseModel):
     target_date: datetime.date
-    actual_physical_cash: float
+    actual_physical_cash: float = Field(ge=0)
     notes: Optional[str] = None
 
 class CashReconciliationResponse(BaseModel):

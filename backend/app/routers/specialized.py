@@ -10,9 +10,9 @@ from app.models.finance import Account, AccountTransaction
 from app.schemas.specialized import (
     ExchangeDeviceResponse, WarrantyResponse, RepairTicketCreate, RepairTicketResponse
 )
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/specialized", tags=["Mobile Exchange, Warranty & Repairs"])
+router = APIRouter(prefix="/specialized", tags=["Mobile Exchange, Warranty & Repairs"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "STAFF"]))])
 
 # ----------------- 1. Exchange / Old Mobile Buyback -----------------
 @router.get("/exchange", response_model=List[ExchangeDeviceResponse])

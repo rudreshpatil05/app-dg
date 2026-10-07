@@ -2,17 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
 import { 
-  Search, Plus, Trash2, Smartphone, Receipt, User, 
+  Search, Plus, Trash2, Smartphone, Receipt, User, ShoppingCart, ArrowLeft,
   CreditCard, DollarSign, QrCode, MessageSquare, Printer, 
   RefreshCw, CheckCircle, AlertCircle, X, Percent, Shield
 } from 'lucide-react';
 
+const EMI_DURATIONS = [3, 6, 9, 12, 15, 18, 24];
+
 export default function POSBilling() {
-  const { business, formatINR, showToast, currentRole } = useApp();
+  const { business, formatINR, showToast, currentRole, setActiveTab } = useApp();
 
   const [products, setProducts] = useState([]);
   const [availableSerials, setAvailableSerials] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [scanInput, setScanInput] = useState('');
+  const [scanResult, setScanResult] = useState(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedBrand, setSelectedBrand] = useState(null);
   const [cart, setCart] = useState([]);
   const [customer, setCustomer] = useState({ name: 'Walk-in Customer', phone: '', address: '', gstin: '' });
   const [savedCustomers, setSavedCustomers] = useState([]);
@@ -40,6 +47,7 @@ export default function POSBilling() {
     number_of_installments: 6,
     interest_rate: 0, // 0% interest promotion
     processing_fee: 500,
+    finance_provider: '',
     notes: 'Store promotional 0% EMI scheme'
   });
 
@@ -63,6 +71,57 @@ export default function POSBilling() {
       setSavedCustomers(custs);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleProductScan = async (event) => {
+    event.preventDefault();
+    const code = scanInput.trim();
+    if (!code || isScanning) return;
+
+    setIsScanning(true);
+    setScanResult(null);
+    try {
+      const result = await api.searchImeiOrBarcode(code);
+      setScanResult(result);
+      if (!result.found) return;
+
+      const product = products.find((item) => item.id === result.product_id) || {
+        id: result.product_id,
+        name: result.product_name,
+        brand: result.brand,
+        model: result.model,
+        sku: result.sku,
+        barcode: result.barcode,
+        is_serialized: result.type === 'SERIAL_DEVICE' || result.is_serialized,
+        selling_price: result.selling_price,
+        mrp: result.mrp,
+        gst_rate: result.gst_rate,
+        hsn_code: result.hsn_code,
+        current_stock: result.current_stock,
+      };
+
+      if (!result.is_available) {
+        showToast(`Product found, but it is ${result.status || 'out of stock'}.`, 'error');
+        return;
+      }
+
+      const serial = result.type === 'SERIAL_DEVICE' ? {
+        id: result.serial_id,
+        product_id: result.product_id,
+        imei1: result.imei1,
+        imei2: result.imei2,
+        serial_number: result.serial_number,
+        color: result.color,
+        storage: result.storage,
+        selling_price: result.selling_price,
+      } : null;
+      addToCart(product, serial);
+      setScanInput('');
+    } catch (error) {
+      setScanResult({ found: false, message: error.message });
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -129,6 +188,14 @@ export default function POSBilling() {
   const grandTotal = Math.max(0, cartSubtotal - totalDiscount);
   const exchangeDeduction = exchangeDevice ? Number(exchangeDevice.final_exchange_value || 0) : 0;
   const finalPayable = Math.max(0, grandTotal - exchangeDeduction);
+  const emiDownPayment = Number(paymentSplits[0]?.amount || 0);
+  const emiFinancedAmount = Math.max(0, finalPayable - emiDownPayment);
+  const emiInterestRate = Number(emiConfig.interest_rate || 0);
+  const emiProcessingFee = Number(emiConfig.processing_fee || 0);
+  const emiInterestAmount = Math.round(((emiFinancedAmount * emiInterestRate * (emiConfig.number_of_installments / 12)) / 100) * 100) / 100;
+  const emiTotalRepayable = Math.round((emiFinancedAmount + emiInterestAmount + emiProcessingFee) * 100) / 100;
+  const emiMonthlyAmount = Math.round((emiTotalRepayable / emiConfig.number_of_installments) * 100) / 100;
+  const emiInputInvalid = emiDownPayment < 0 || emiDownPayment > finalPayable || emiInterestRate < 0 || emiProcessingFee < 0;
 
   // Auto-sync payment split with finalPayable
   useEffect(() => {
@@ -155,6 +222,11 @@ export default function POSBilling() {
 
     if (!customer.phone || customer.phone.length < 10) {
       showToast('Please enter a 10-digit customer mobile number for invoice & warranty record.', 'error');
+      return;
+    }
+
+    if (isEmiSelected && emiInputInvalid) {
+      showToast('Down payment must be between zero and the final payable amount.', 'error');
       return;
     }
 
@@ -220,10 +292,34 @@ export default function POSBilling() {
     }
   };
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.brand.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(searchQuery))
+  const normalizeCategory = (categoryName) => {
+    const name = (categoryName || '').toLowerCase();
+    if (name.includes('phone') || name.includes('mobile') || name.includes('smartphone')) return 'Mobile Phones';
+    if (name.includes('accessor')) return 'Inventory & Accessories';
+    return categoryName || 'Other Products';
+  };
+
+  const categoryGroups = products.reduce((groups, product) => {
+    const category = normalizeCategory(product.category_name);
+    if (!groups[category]) groups[category] = [];
+    groups[category].push(product);
+    return groups;
+  }, {});
+
+  const categoryEntries = Object.entries(categoryGroups)
+    .map(([name, categoryProducts]) => ({ name, products: categoryProducts }))
+    .filter((category) => category.name.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const selectedCategoryProducts = selectedCategory ? categoryGroups[selectedCategory] || [] : [];
+  const brandEntries = [...new Set(selectedCategoryProducts.map((product) => product.brand).filter(Boolean))]
+    .sort((first, second) => first.localeCompare(second))
+    .filter((brand) => brand.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const selectedBrandProducts = selectedCategoryProducts.filter((product) => product.brand === selectedBrand);
+  const filteredProducts = selectedBrandProducts.filter(product =>
+    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (product.model && product.model.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (product.barcode && product.barcode.includes(searchQuery))
   );
 
   return (
@@ -263,21 +359,137 @@ export default function POSBilling() {
         
         {/* Left Column: Product Picker & IMEI Quick Grid */}
         <div className="lg:col-span-7 space-y-4">
+          <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800 text-white space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold flex items-center gap-2"><QrCode className="w-4 h-4 text-emerald-300" /> Scan product to sell</h3>
+                <p className="text-[11px] text-slate-300 mt-1">Scan a barcode, QR value, IMEI, or serial number. Press Enter after a scanner beep.</p>
+              </div>
+              {isScanning && <RefreshCw className="w-4 h-4 text-emerald-300 animate-spin" />}
+            </div>
+            <form onSubmit={handleProductScan} className="flex gap-2">
+              <input
+                autoFocus
+                value={scanInput}
+                onChange={(event) => setScanInput(event.target.value)}
+                placeholder="Scan IMEI / barcode / SKU..."
+                className="flex-1 px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg outline-none focus:border-emerald-400"
+              />
+              <button type="submit" disabled={isScanning || !scanInput.trim()} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-xs font-bold">Find & add</button>
+            </form>
+            {scanResult && (
+              <div className={`rounded-lg p-3 text-xs ${scanResult.found ? 'bg-white/10 border border-emerald-400/40' : 'bg-rose-500/15 border border-rose-300/40'}`}>
+                {!scanResult.found ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-semibold text-rose-100">Product not found</span>
+                    <button type="button" onClick={() => setActiveTab('inventory')} className="px-2.5 py-1.5 rounded-md bg-white text-slate-900 font-bold">Add new product</button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1">
+                    <span className="col-span-2 font-bold text-white">{scanResult.brand} {scanResult.model || scanResult.product_name}</span>
+                    <span>Stock: <b>{scanResult.current_stock ?? '-'}</b></span>
+                    <span>Price: <b>{formatINR(scanResult.selling_price)}</b></span>
+                    <span>IMEI 1: <b>{scanResult.imei1 || '-'}</b></span>
+                    <span>IMEI 2: <b>{scanResult.imei2 || '-'}</b></span>
+                    <span>Serial: <b>{scanResult.serial_number || '-'}</b></span>
+                    <span>SKU: <b>{scanResult.sku || '-'}</b></span>
+                    <span>Warranty: <b>{scanResult.warranty_months ? `${scanResult.warranty_months} months` : '-'}</b></span>
+                    <span>Supplier: <b>{scanResult.supplier || '-'}</b></span>
+                    <span>Purchase date: <b>{scanResult.purchase_date || '-'}</b></span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-            {/* Search Input */}
+            {/* Category -> Brand -> Product selection */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search smartphone model, accessories, brand, or barcode..."
+                placeholder={selectedBrand ? `Search ${selectedBrand} models or barcode...` : selectedCategory ? 'Search brands...' : 'Search categories...'}
                 className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-emerald-500 outline-none"
               />
             </div>
 
-            {/* Product Quick Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
+            <div className="flex items-center justify-between min-h-7">
+              {selectedCategory && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedBrand) setSelectedBrand(null);
+                    else setSelectedCategory(null);
+                    setSearchQuery('');
+                  }}
+                  className="flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-emerald-700"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" /> Back
+                </button>
+              )}
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider ml-auto">
+                {!selectedCategory ? 'Choose a category' : !selectedBrand ? `${selectedCategory} / Choose a brand` : `${selectedBrand} models`}
+              </span>
+            </div>
+
+            {!selectedCategory && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
+                {categoryEntries.map((category) => (
+                  <button
+                    type="button"
+                    key={category.name}
+                    onClick={() => {
+                      setSelectedCategory(category.name);
+                      setSearchQuery('');
+                    }}
+                    className="p-3 rounded-xl border border-slate-200 bg-white hover:bg-emerald-50/40 hover:border-emerald-400 text-left transition-all"
+                  >
+                    <Smartphone className="w-5 h-5 text-emerald-600 mb-2" />
+                    <p className="text-xs font-bold text-slate-800">{category.name}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">{category.products.length} products</p>
+                  </button>
+                ))}
+                {categoryEntries.length === 0 && (
+                  <div className="col-span-full py-10 text-center text-xs text-slate-500">
+                    No product categories are available for this store.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedCategory && !selectedBrand && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
+                {brandEntries.map((brand) => (
+                  <button
+                    type="button"
+                    key={brand}
+                    onClick={() => {
+                      setSelectedBrand(brand);
+                      setSearchQuery('');
+                    }}
+                    className="p-3 rounded-xl border border-slate-200 bg-white hover:bg-emerald-50/40 hover:border-emerald-400 text-left transition-all"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center text-xs font-extrabold mb-2">
+                      {brand.slice(0, 2).toUpperCase()}
+                    </div>
+                    <p className="text-xs font-bold text-slate-800">{brand}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {selectedCategoryProducts.filter((product) => product.brand === brand).length} models
+                    </p>
+                  </button>
+                ))}
+                {brandEntries.length === 0 && (
+                  <div className="col-span-full py-10 text-center text-xs text-slate-500">
+                    No brands are available in {selectedCategory}.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedCategory && selectedBrand && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
               {filteredProducts.map((p) => {
                 const inStockSerials = availableSerials.filter(s => s.product_id === p.id);
                 const isOutOfStock = p.is_serialized ? inStockSerials.length === 0 : p.current_stock <= 0;
@@ -313,7 +525,13 @@ export default function POSBilling() {
                   </div>
                 );
               })}
+              {filteredProducts.length === 0 && (
+                <div className="col-span-full py-10 text-center text-xs text-slate-500">
+                  No {selectedBrand} products match your search or are available in stock.
+                </div>
+              )}
             </div>
+            )}
           </div>
 
           {/* Quick Available Serial Numbers (Mobiles) Grid */}
@@ -485,6 +703,9 @@ export default function POSBilling() {
                     onClick={() => {
                       setSelectedPrimaryMethod(m.id);
                       setIsEmiSelected(m.id === 'EMI');
+                      if (m.id === 'EMI') {
+                        setPaymentSplits([{ payment_method: 'CASH', amount: 0, reference_number: '' }]);
+                      }
                     }}
                     className={`py-2 px-1.5 rounded-xl border text-xs font-bold flex flex-col items-center gap-1 transition-all ${
                       (isEmiSelected ? m.id === 'EMI' : selectedPrimaryMethod === m.id)
@@ -501,43 +722,92 @@ export default function POSBilling() {
 
             {/* Store-Financed EMI Drawer if EMI selected */}
             {isEmiSelected && (
-              <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-200 text-xs space-y-2">
+              <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-200 text-xs space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-indigo-900 flex items-center gap-1">
                     <Percent className="w-3.5 h-3.5 text-indigo-600" /> Store-Financed EMI Plan
                   </span>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">0% Promo</span>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">Live calculation</span>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="text-[10px] text-slate-500">Months</label>
-                    <select
-                      value={emiConfig.number_of_installments}
-                      onChange={(e) => setEmiConfig({ ...emiConfig, number_of_installments: Number(e.target.value) })}
-                      className="w-full bg-white border border-indigo-200 rounded p-1 text-xs font-semibold"
-                    >
-                      <option value={3}>3 Months</option>
-                      <option value={6}>6 Months</option>
-                      <option value={9}>9 Months</option>
-                      <option value={12}>12 Months</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500">Down Payment</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2">
+                    <label className="text-[10px] text-slate-500">EMI provider / finance company</label>
                     <input
-                      type="number"
-                      value={paymentSplits[0]?.amount || 0}
-                      onChange={(e) => setPaymentSplits([{ payment_method: 'CASH', amount: Number(e.target.value) }])}
-                      className="w-full bg-white border border-indigo-200 rounded p-1 text-xs font-semibold"
+                      type="text"
+                      value={emiConfig.finance_provider}
+                      onChange={(e) => setEmiConfig({ ...emiConfig, finance_provider: e.target.value })}
+                      placeholder="Optional provider name"
+                      className="w-full bg-white border border-indigo-200 rounded p-1.5 text-xs font-semibold"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-500">Monthly EMI</label>
-                    <p className="font-bold text-indigo-900 mt-1">
-                      {formatINR(Math.max(0, (finalPayable - (paymentSplits[0]?.amount || 0)) / emiConfig.number_of_installments))}
-                    </p>
+                    <label className="text-[10px] text-slate-500">Product price</label>
+                    <p className="mt-1 px-2 py-1.5 bg-white/70 border border-indigo-100 rounded font-bold text-slate-800">{formatINR(finalPayable)}</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Down payment</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={finalPayable}
+                      step="0.01"
+                      value={paymentSplits[0]?.amount ?? 0}
+                      onChange={(e) => setPaymentSplits([{ payment_method: 'CASH', amount: e.target.value, reference_number: '' }])}
+                      className={`w-full bg-white border rounded p-1.5 text-xs font-semibold ${emiInputInvalid ? 'border-rose-400' : 'border-indigo-200'}`}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Interest rate (% yearly)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={emiConfig.interest_rate}
+                      onChange={(e) => setEmiConfig({ ...emiConfig, interest_rate: e.target.value })}
+                      className="w-full bg-white border border-indigo-200 rounded p-1.5 text-xs font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500">Processing fee</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={emiConfig.processing_fee}
+                      onChange={(e) => setEmiConfig({ ...emiConfig, processing_fee: e.target.value })}
+                      className="w-full bg-white border border-indigo-200 rounded p-1.5 text-xs font-semibold"
+                    />
                   </div>
                 </div>
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Available plans</p>
+                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+                    {EMI_DURATIONS.map((duration) => {
+                      const durationInterest = Math.round(((emiFinancedAmount * emiInterestRate * (duration / 12)) / 100) * 100) / 100;
+                      const durationTotal = Math.round((emiFinancedAmount + durationInterest + emiProcessingFee) * 100) / 100;
+                      const durationMonthly = Math.round((durationTotal / duration) * 100) / 100;
+                      return (
+                        <button
+                          key={duration}
+                          type="button"
+                          onClick={() => setEmiConfig({ ...emiConfig, number_of_installments: duration })}
+                          className={`px-1 py-1.5 rounded-lg border text-center ${emiConfig.number_of_installments === duration ? 'bg-indigo-700 text-white border-indigo-700' : 'bg-white text-slate-700 border-indigo-100 hover:border-indigo-400'}`}
+                        >
+                          <span className="block font-bold">{duration}m</span>
+                          <span className="block text-[10px]">{formatINR(durationMonthly)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-white/70 border border-indigo-100 rounded-lg p-2">
+                  <div><span className="block text-[10px] text-slate-500">Financed amount</span><strong>{formatINR(emiFinancedAmount)}</strong></div>
+                  <div><span className="block text-[10px] text-slate-500">Interest</span><strong>{formatINR(emiInterestAmount)}</strong></div>
+                  <div><span className="block text-[10px] text-slate-500">Total payable</span><strong>{formatINR(emiTotalRepayable)}</strong></div>
+                  <div><span className="block text-[10px] text-slate-500">Remaining balance</span><strong>{formatINR(emiTotalRepayable)}</strong></div>
+                  <div><span className="block text-[10px] text-slate-500">Monthly EMI</span><strong className="text-indigo-800">{formatINR(emiMonthlyAmount)}</strong></div>
+                </div>
+                {emiInputInvalid && <p className="text-[11px] font-semibold text-rose-700">Down payment cannot be negative or greater than the product price.</p>}
               </div>
             )}
 
@@ -769,6 +1039,12 @@ export default function POSBilling() {
                         <span>{formatINR(completedSale.balance_due)}</span>
                       </div>
                     )}
+                    {completedSale.emi_duration && (
+                      <div className="mt-2 p-2 rounded-lg bg-indigo-50 border border-indigo-100 text-[10px] text-indigo-900">
+                        <div className="font-bold">EMI Plan: {completedSale.emi_duration} months x {formatINR(completedSale.emi_amount)}</div>
+                        <div>Down payment: {formatINR(completedSale.emi_down_payment)} | Total payable: {formatINR(completedSale.emi_total_repayable)}</div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="text-center text-[9px] space-y-1 pt-1">
@@ -812,6 +1088,7 @@ export default function POSBilling() {
                       <p className="font-bold text-slate-700">Payment Summary:</p>
                       <p>Mode: <span className="font-semibold">{completedSale.payment_type}</span></p>
                       <p>Status: <span className="font-bold text-emerald-700">{completedSale.payment_status}</span></p>
+                      {completedSale.emi_duration && <p>EMI: <span className="font-semibold">{completedSale.emi_duration} months x {formatINR(completedSale.emi_amount)}</span></p>}
                     </div>
                   </div>
 

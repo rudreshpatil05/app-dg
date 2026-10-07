@@ -2,13 +2,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import engine, Base
+from app.seed import seed_database
 import app.models
 from app.routers import (
     auth, dashboard, inventory, pos, customers, emi, purchases, suppliers, finance, specialized, reports, settings as settings_router
 )
 
-# Initialize database schema
-Base.metadata.create_all(bind=engine)
+# Initialize local/staging schema only. Production schema changes must use a
+# reviewed migration against the configured MySQL database.
+if settings.ENVIRONMENT.lower() != "production":
+    Base.metadata.create_all(bind=engine)
+if settings.ENVIRONMENT.lower() == "development" or (
+    settings.ENVIRONMENT.lower() == "staging" and settings.SEED_DATABASE
+):
+    seed_database()
 
 app = FastAPI(
     title="DG-Retail OS - Mobile & Electronics Retail API",
@@ -21,8 +28,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Active-Business-Id"],
 )
 
 # Mount API Routers

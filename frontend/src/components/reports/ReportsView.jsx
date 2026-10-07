@@ -6,8 +6,13 @@ import {
   DollarSign, FileSpreadsheet, ShieldAlert, Percent
 } from 'lucide-react';
 
+const toLocalIso = (date) => {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
 export default function ReportsView() {
-  const { formatINR, isStaff } = useApp();
+  const { formatINR, isStaff, showToast } = useApp();
 
   const [activeReport, setActiveReport] = useState('sales'); // 'sales', 'profit', 'gst', 'stock'
   const [salesData, setSalesData] = useState(null);
@@ -15,16 +20,30 @@ export default function ReportsView() {
   const [gstData, setGstData] = useState(null);
   const [stockData, setStockData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const today = new Date();
+  const todayIso = toLocalIso(today);
+  const monthStartIso = toLocalIso(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [salesFilters, setSalesFilters] = useState({ start_date: monthStartIso, end_date: todayIso, category_id: '', brand: '', product_search: '', customer_search: '', payment_method: '' });
+  const [appliedSalesFilters, setAppliedSalesFilters] = useState({ start_date: monthStartIso, end_date: todayIso });
+  const [categoryOptions, setCategoryOptions] = useState([]);
+  const [brandOptions, setBrandOptions] = useState([]);
 
   useEffect(() => {
     loadReports();
-  }, [activeReport]);
+  }, [activeReport, appliedSalesFilters]);
+
+  useEffect(() => {
+    Promise.all([api.getCategories(), api.getProducts()]).then(([categories, products]) => {
+      setCategoryOptions(categories);
+      setBrandOptions([...new Set(products.map((product) => product.brand).filter(Boolean))].sort());
+    }).catch((err) => console.warn('Could not load sales filter options:', err.message));
+  }, []);
 
   const loadReports = async () => {
     setLoading(true);
     try {
       if (activeReport === 'sales') {
-        const s = await api.getSalesReport();
+        const s = await api.getSalesReport(appliedSalesFilters);
         setSalesData(s);
       } else if (activeReport === 'profit' && !isStaff) {
         const p = await api.getProfitLossReport();
@@ -43,8 +62,58 @@ export default function ReportsView() {
     }
   };
 
-  const handleExportCsv = (type) => {
-    window.open(api.getExportCsvUrl(type), '_blank');
+  const handleExportCsv = async (type) => {
+    try {
+      await api.downloadExportCsv(type);
+    } catch (err) {
+      showToast(err.message || 'Could not generate CSV file', 'error');
+    }
+  };
+
+  const handleExportPdf = async () => {
+    try {
+      await api.downloadSalesPdf(appliedSalesFilters);
+    } catch (err) {
+      showToast(err.message || 'Could not generate PDF', 'error');
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      await api.downloadSalesXlsx(appliedSalesFilters);
+    } catch (err) {
+      showToast(err.message || 'Could not generate Excel file', 'error');
+    }
+  };
+
+  const applySalesFilters = () => {
+    setAppliedSalesFilters(Object.fromEntries(Object.entries(salesFilters).filter(([, value]) => value !== '')));
+  };
+
+  const resetSalesFilters = () => {
+    const defaults = { start_date: monthStartIso, end_date: todayIso, category_id: '', brand: '', product_search: '', customer_search: '', payment_method: '' };
+    setSalesFilters(defaults);
+    setAppliedSalesFilters({ start_date: monthStartIso, end_date: todayIso });
+  };
+
+  const applyQuickPeriod = (period) => {
+    const date = new Date();
+    let start = new Date(date);
+    let end = new Date(date);
+    if (period === 'YESTERDAY') {
+      start.setDate(start.getDate() - 1);
+      end = new Date(start);
+    } else if (period === 'THIS_WEEK') {
+      start.setDate(start.getDate() - start.getDay());
+    } else if (period === 'LAST_MONTH') {
+      start = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+      end = new Date(date.getFullYear(), date.getMonth(), 0);
+    } else if (period === 'THIS_MONTH') {
+      start = new Date(date.getFullYear(), date.getMonth(), 1);
+    }
+    const next = { ...salesFilters, start_date: toLocalIso(start), end_date: toLocalIso(end) };
+    setSalesFilters(next);
+    setAppliedSalesFilters(Object.fromEntries(Object.entries(next).filter(([, value]) => value !== '')));
   };
 
   return (
@@ -66,6 +135,22 @@ export default function ReportsView() {
           >
             <Download className="w-3.5 h-3.5 text-emerald-600" /> Export Excel/CSV
           </button>
+          {activeReport === 'sales' && (
+            <button
+              onClick={handleExportPdf}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Download PDF
+            </button>
+          )}
+          {activeReport === 'sales' && (
+            <button
+              onClick={handleExportExcel}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Download Excel
+            </button>
+          )}
           <button
             onClick={() => window.print()}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-semibold shadow-xs"
@@ -116,6 +201,31 @@ export default function ReportsView() {
       </div>
 
       {/* Content Area */}
+      {activeReport === 'sales' && (
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Sales Period</h3>
+              <p className="text-[11px] text-slate-500">All totals below are calculated from completed invoices in the selected period.</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[['TODAY', 'Today'], ['YESTERDAY', 'Yesterday'], ['THIS_WEEK', 'This Week'], ['THIS_MONTH', 'This Month'], ['LAST_MONTH', 'Last Month']].map(([id, label]) => (
+                <button key={id} onClick={() => applyQuickPeriod(id)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">{label}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+            <label className="text-[11px] font-semibold text-slate-600">From<input type="date" value={salesFilters.start_date} onChange={(e) => setSalesFilters({ ...salesFilters, start_date: e.target.value })} className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" /></label>
+            <label className="text-[11px] font-semibold text-slate-600">To<input type="date" value={salesFilters.end_date} onChange={(e) => setSalesFilters({ ...salesFilters, end_date: e.target.value })} className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" /></label>
+            <label className="text-[11px] font-semibold text-slate-600">Category<select value={salesFilters.category_id} onChange={(e) => setSalesFilters({ ...salesFilters, category_id: e.target.value })} className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg bg-white text-xs"><option value="">All categories</option>{categoryOptions.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <label className="text-[11px] font-semibold text-slate-600">Brand<select value={salesFilters.brand} onChange={(e) => setSalesFilters({ ...salesFilters, brand: e.target.value })} className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg bg-white text-xs"><option value="">All brands</option>{brandOptions.map((brand) => <option key={brand} value={brand}>{brand}</option>)}</select></label>
+            <label className="text-[11px] font-semibold text-slate-600">Product/Model<input value={salesFilters.product_search} onChange={(e) => setSalesFilters({ ...salesFilters, product_search: e.target.value })} placeholder="Search product" className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" /></label>
+            <label className="text-[11px] font-semibold text-slate-600">Customer<input value={salesFilters.customer_search} onChange={(e) => setSalesFilters({ ...salesFilters, customer_search: e.target.value })} placeholder="Name or phone" className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" /></label>
+            <label className="text-[11px] font-semibold text-slate-600">Payment<select value={salesFilters.payment_method} onChange={(e) => setSalesFilters({ ...salesFilters, payment_method: e.target.value })} className="w-full mt-1 px-2 py-1.5 border border-slate-200 rounded-lg bg-white text-xs"><option value="">All methods</option><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option><option value="BANK">Bank</option><option value="EMI">EMI</option></select></label>
+            <div className="flex items-end gap-1.5"><button onClick={applySalesFilters} className="flex-1 px-2 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">Apply</button><button onClick={resetSalesFilters} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold">Reset</button></div>
+          </div>
+        </div>
+      )}
       {loading ? (
         <div className="p-8 text-center text-xs text-slate-400">Loading report metrics...</div>
       ) : (
@@ -123,11 +233,11 @@ export default function ReportsView() {
           {/* TAB 1: Sales Report */}
           {activeReport === 'sales' && salesData && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Sales Turnover</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Sales</span>
                   <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">{formatINR(salesData.total_revenue)}</p>
-                  <p className="text-[11px] text-slate-500">{salesData.invoices_count} tax invoices</p>
+                  <p className="text-[11px] text-slate-500">{salesData.invoices_count} bills</p>
                 </div>
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GST Collected</span>
@@ -140,9 +250,28 @@ export default function ReportsView() {
                   <p className="text-[11px] text-slate-500">Counter promotions</p>
                 </div>
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Top Payment Mode</span>
-                  <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">UPI & Cash</p>
-                  <p className="text-[11px] text-slate-500">Instant counter settlement</p>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Items Sold</span>
+                  <p className="text-xl font-extrabold text-slate-900 font-display mt-0.5">{salesData.total_items_sold}</p>
+                  <p className="text-[11px] text-slate-500">Units in completed bills</p>
+                </div>
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Paid</span><p className="text-xl font-extrabold text-emerald-700 font-display mt-0.5">{formatINR(salesData.total_paid)}</p></div>
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Credit / Due</span><p className="text-xl font-extrabold text-rose-600 font-display mt-0.5">{formatINR(salesData.total_due)}</p></div>
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">EMI Sales</span><p className="text-xl font-extrabold text-indigo-700 font-display mt-0.5">{formatINR(salesData.total_emi_sales)}</p></div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[["Cash", salesData.cash_sales], ["UPI", salesData.upi_sales], ["Card / Bank", salesData.card_bank_sales], ["Period", `${salesData.period.start} → ${salesData.period.end}`]].map(([label, value]) => <div key={label} className="bg-slate-50 p-3 rounded-xl border border-slate-200"><span className="text-[10px] font-bold text-slate-500 uppercase">{label}</span><p className="text-sm font-bold text-slate-900 mt-1">{typeof value === 'number' ? formatINR(value) : value}</p></div>)}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div className="p-3.5 border-b border-slate-200 bg-slate-50/50"><h4 className="text-xs font-bold text-slate-700">Category-wise Sales</h4></div><table className="w-full text-xs"><thead><tr className="bg-slate-50 text-[10px] uppercase text-slate-500"><th className="p-3 text-left">Category</th><th className="p-3 text-right">Quantity</th><th className="p-3 text-right">Sales</th></tr></thead><tbody className="divide-y divide-slate-100">{salesData.categories.map((row) => <tr key={row.category}><td className="p-3 font-semibold">{row.category}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right font-bold text-emerald-700">{formatINR(row.revenue)}</td></tr>)}</tbody></table></div>
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"><div className="p-3.5 border-b border-slate-200 bg-slate-50/50"><h4 className="text-xs font-bold text-slate-700">Product-wise Sales</h4></div><div className="max-h-72 overflow-y-auto"><table className="w-full text-xs"><thead><tr className="bg-slate-50 text-[10px] uppercase text-slate-500"><th className="p-3 text-left">Product / Brand</th><th className="p-3 text-right">Qty</th><th className="p-3 text-right">Revenue</th><th className="p-3 text-right">Avg.</th></tr></thead><tbody className="divide-y divide-slate-100">{salesData.products.map((row) => <tr key={row.product_id}><td className="p-3"><strong>{row.product}</strong><span className="block text-[10px] text-slate-500">{row.brand} · {row.category}</span></td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right font-bold text-emerald-700">{formatINR(row.revenue)}</td><td className="p-3 text-right">{formatINR(row.average_selling_price)}</td></tr>)}</tbody></table></div></div>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-3.5 border-b border-slate-200 bg-slate-50/50"><h4 className="text-xs font-bold text-slate-700">Matching Bills & Transactions</h4></div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs min-w-[850px]"><thead><tr className="bg-slate-50 text-[10px] uppercase text-slate-500"><th className="p-3 text-left">Invoice / Date</th><th className="p-3 text-left">Customer</th><th className="p-3 text-left">Products</th><th className="p-3 text-right">Qty</th><th className="p-3 text-right">Discount</th><th className="p-3 text-right">Tax</th><th className="p-3 text-right">Final</th><th className="p-3 text-left">Payment / Staff</th></tr></thead><tbody className="divide-y divide-slate-100">{salesData.transactions.map((row) => <tr key={row.id}><td className="p-3"><strong className="font-mono">{row.invoice_number}</strong><span className="block text-[10px] text-slate-500">{row.date}</span></td><td className="p-3">{row.customer}</td><td className="p-3 max-w-xs">{row.products}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right">{formatINR(row.discount)}</td><td className="p-3 text-right">{formatINR(row.tax)}</td><td className="p-3 text-right font-bold text-emerald-700">{formatINR(row.final_amount)}</td><td className="p-3"><span className="block">{row.payment_methods || '—'}</span><span className="text-[10px] text-slate-500">{row.staff}</span></td></tr>)}</tbody></table>
+                  {salesData.transactions.length === 0 && <p className="p-6 text-center text-xs text-slate-400">No transactions match the selected filters.</p>}
                 </div>
               </div>
 

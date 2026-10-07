@@ -1,13 +1,24 @@
-const API_BASE = '/api/v1';
+const API_BASE = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '');
+
+function buildApiUrl(endpoint) {
+  return `${API_BASE}${endpoint}`;
+}
+
+function authHeaders() {
+  const accessToken = localStorage.getItem('dg_access_token');
+  const activeBusinessId = localStorage.getItem('dg_active_business_id');
+  return {
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...(activeBusinessId ? { 'X-Active-Business-Id': activeBusinessId } : {})
+  };
+}
 
 export async function apiRequest(endpoint, method = 'GET', body = null, customHeaders = {}) {
-  const currentRole = localStorage.getItem('dg_user_role') || 'OWNER';
-  const currentUserId = localStorage.getItem('dg_user_id') || '1';
+  const accessToken = localStorage.getItem('dg_access_token');
 
   const headers = {
     'Content-Type': 'application/json',
-    'X-User-Role': currentRole,
-    'X-User-Id': currentUserId,
+    ...authHeaders(),
     ...customHeaders
   };
 
@@ -20,7 +31,12 @@ export async function apiRequest(endpoint, method = 'GET', body = null, customHe
     config.body = JSON.stringify(body);
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, config);
+  let response;
+  try {
+    response = await fetch(buildApiUrl(endpoint), config);
+  } catch (error) {
+    throw new Error('Unable to connect to server');
+  }
 
   if (!response.ok) {
     let errorMsg = 'An unexpected error occurred';
@@ -29,6 +45,10 @@ export async function apiRequest(endpoint, method = 'GET', body = null, customHe
       errorMsg = errData.detail || errorMsg;
     } catch (e) {
       errorMsg = response.statusText;
+    }
+    if (response.status === 401 && accessToken) {
+      window.dispatchEvent(new Event('dg-auth-expired'));
+      errorMsg = 'Session expired. Please login again';
     }
     throw new Error(errorMsg);
   }
@@ -42,11 +62,26 @@ export async function apiRequest(endpoint, method = 'GET', body = null, customHe
   return await response.json();
 }
 
+async function downloadFile(endpoint, filename, fallbackMessage) {
+  const response = await fetch(buildApiUrl(endpoint), { headers: authHeaders() });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || fallbackMessage);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   // Auth & Store
+  login: (username, password) => apiRequest('/auth/login', 'POST', { username, password }),
   getMe: () => apiRequest('/auth/me'),
   getStaff: () => apiRequest('/auth/staff'),
   getBusiness: () => apiRequest('/auth/business'),
+  getBusinesses: () => apiRequest('/auth/businesses'),
+  switchBusiness: (businessId) => apiRequest(`/auth/switch-business?business_id=${businessId}`, 'POST'),
   updateBusiness: (data) => apiRequest('/auth/business', 'PUT', data),
   pinLogin: (pin, business_id = 1) => apiRequest('/auth/pin-login', 'POST', { pin, business_id }),
 
@@ -151,11 +186,19 @@ export const api = {
     return apiRequest(`/reports/gst-summary${query ? `?${query}` : ''}`);
   },
   getStockValuationReport: () => apiRequest('/reports/stock-valuation'),
-  getExportCsvUrl: (reportType) => `/api/v1/reports/export/csv?report_type=${reportType}`,
+  downloadSalesPdf: async (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    await downloadFile(`/reports/sales-summary/pdf${query ? `?${query}` : ''}`, `dg-retail-sales-${params.start_date || 'all'}-to-${params.end_date || 'all'}.pdf`, 'Could not generate PDF');
+  },
+  downloadSalesXlsx: async (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    await downloadFile(`/reports/sales-summary/xlsx${query ? `?${query}` : ''}`, `dg-retail-sales-${params.start_date || 'all'}-to-${params.end_date || 'all'}.xlsx`, 'Could not generate Excel file');
+  },
+  downloadExportCsv: (reportType) => downloadFile(`/reports/export/csv?report_type=${encodeURIComponent(reportType)}`, `dg-retail-${reportType}.csv`, 'Could not generate CSV file'),
 
   // Settings & Audit
   getAuditLogs: () => apiRequest('/settings/audit-logs'),
   getNotifications: (unreadOnly = false) => apiRequest(`/settings/notifications?unread_only=${unreadOnly}`),
   markNotificationRead: (id) => apiRequest(`/settings/notifications/${id}/read`, 'PUT'),
-  getBackupExportUrl: () => '/api/v1/settings/backup/export-json'
+  downloadBackup: () => downloadFile('/settings/backup/export-json', 'dg-retail-backup.json', 'Could not generate backup')
 };

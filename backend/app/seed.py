@@ -8,7 +8,182 @@ from app.models import (
     Sale, SaleItem, SalePayment, EmiPlan, EmiInstallment, EmiPayment,
     ExchangeDevice, WarrantyRecord, RepairTicket, Notification, AuditLog
 )
-from app.auth import hash_password
+from app.auth import hash_password, hash_pin
+
+STORE_PORTFOLIO = [
+    {
+        "name": "DG Mobile and Electronics - Pali Maharashtra",
+        "city": "Pali",
+        "address": "Main Market, Pali",
+        "pincode": "306401",
+        "invoice_prefix": "PALI",
+        "phone": "9822012347",
+    },
+    {
+        "name": "DG Mobile and Electronics - Parli Maharashtra",
+        "city": "Parli",
+        "address": "Main Market, Parli",
+        "pincode": "431515",
+        "invoice_prefix": "PARL",
+        "phone": "9822012348",
+    },
+    {
+        "name": "DG Mobile and Electronics - Kolad Maharashtra",
+        "city": "Kolad",
+        "address": "Mumbai-Goa Highway, Kolad",
+        "pincode": "402304",
+        "invoice_prefix": "KOLA",
+        "phone": "9822012349",
+    },
+]
+
+def ensure_store_portfolio(db):
+    """Add new stores and copy the primary store's reusable baseline data once."""
+    source = db.query(Business).order_by(Business.id).first()
+    if not source:
+        return
+
+    if source.city == "Roha" and "Roha" not in source.name:
+        source.name = "DG Mobile and Electronics - Roha Maharashtra"
+
+    existing_names = {store.name for store in db.query(Business).all()}
+    source_categories = db.query(Category).filter(Category.business_id == source.id).all()
+    source_products = db.query(Product).filter(Product.business_id == source.id).all()
+    source_serials = db.query(SerialNumber).filter(SerialNumber.business_id == source.id).all()
+    source_accounts = db.query(Account).filter(Account.business_id == source.id).all()
+    source_expense_categories = db.query(ExpenseCategory).filter(ExpenseCategory.business_id == source.id).all()
+    source_customers = db.query(Customer).filter(Customer.business_id == source.id).all()
+    source_suppliers = db.query(Supplier).filter(Supplier.business_id == source.id).all()
+
+    for store_data in STORE_PORTFOLIO:
+        if store_data["name"] in existing_names:
+            continue
+
+        store = Business(
+            **store_data,
+            state="Maharashtra",
+            state_code="27",
+            is_active=True,
+        )
+        db.add(store)
+        db.flush()
+
+        category_map = {}
+        for category in source_categories:
+            copied_category = Category(
+                business_id=store.id,
+                name=category.name,
+                slug=category.slug,
+                description=category.description,
+                is_active=category.is_active,
+            )
+            db.add(copied_category)
+            db.flush()
+            category_map[category.id] = copied_category.id
+
+        product_map = {}
+        for product in source_products:
+            copied_product = Product(
+                business_id=store.id,
+                category_id=category_map[product.category_id],
+                name=product.name,
+                brand=product.brand,
+                model=product.model,
+                sku=product.sku,
+                barcode=product.barcode,
+                hsn_code=product.hsn_code,
+                gst_rate=product.gst_rate,
+                mrp=product.mrp,
+                selling_price=product.selling_price,
+                purchase_cost=product.purchase_cost,
+                wholesale_price=product.wholesale_price,
+                min_stock_level=product.min_stock_level,
+                current_stock=product.current_stock,
+                is_serialized=product.is_serialized,
+                warranty_months=product.warranty_months,
+                image_url=product.image_url,
+                description=product.description,
+                is_active=product.is_active,
+            )
+            db.add(copied_product)
+            db.flush()
+            product_map[product.id] = copied_product.id
+
+        for serial in source_serials:
+            db.add(SerialNumber(
+                business_id=store.id,
+                product_id=product_map[serial.product_id],
+                imei1=f"{serial.imei1}-{store.id}" if serial.imei1 else None,
+                imei2=f"{serial.imei2}-{store.id}" if serial.imei2 else None,
+                serial_number=f"{serial.serial_number}-{store.id}" if serial.serial_number else None,
+                color=serial.color,
+                ram=serial.ram,
+                storage=serial.storage,
+                purchase_cost=serial.purchase_cost,
+                selling_price=serial.selling_price,
+                status="IN_STOCK",
+                warranty_start=serial.warranty_start,
+                warranty_end=serial.warranty_end,
+                notes=f"Baseline stock for {store.city}",
+            ))
+
+        for account in source_accounts:
+            db.add(Account(
+                business_id=store.id,
+                name=account.name,
+                account_type=account.account_type,
+                account_number=account.account_number,
+                bank_name=account.bank_name,
+                ifsc_code=account.ifsc_code,
+                upi_id=account.upi_id,
+                opening_balance=account.opening_balance,
+                current_balance=account.opening_balance,
+                is_default=account.is_default,
+                is_active=account.is_active,
+            ))
+
+        for category in source_expense_categories:
+            db.add(ExpenseCategory(
+                business_id=store.id,
+                name=category.name,
+                description=category.description,
+                is_active=category.is_active,
+            ))
+
+        for customer in source_customers:
+            db.add(Customer(
+                business_id=store.id,
+                name=customer.name,
+                phone=customer.phone,
+                alternate_phone=customer.alternate_phone,
+                email=customer.email,
+                address=customer.address,
+                city=store.city,
+                state="Maharashtra",
+                gstin=customer.gstin,
+                credit_limit=customer.credit_limit,
+                is_active=customer.is_active,
+            ))
+
+        for supplier in source_suppliers:
+            db.add(Supplier(
+                business_id=store.id,
+                name=supplier.name,
+                company=supplier.company,
+                phone=supplier.phone,
+                email=supplier.email,
+                address=supplier.address,
+                city=store.city,
+                state="Maharashtra",
+                gstin=supplier.gstin,
+                bank_name=supplier.bank_name,
+                bank_account_no=supplier.bank_account_no,
+                bank_ifsc=supplier.bank_ifsc,
+                upi_id=supplier.upi_id,
+                is_active=supplier.is_active,
+            ))
+
+    db.commit()
 
 def seed_database():
     Base.metadata.create_all(bind=engine)
@@ -16,7 +191,8 @@ def seed_database():
 
     # Check if already seeded
     if db.query(Business).first():
-        print("Database already contains records. Skipping seed.")
+        ensure_store_portfolio(db)
+        print("Database already contains records. Store portfolio verified.")
         db.close()
         return
 
@@ -30,11 +206,11 @@ def seed_database():
         phone="9822012345",
         alternate_phone="02025531234",
         email="shreeganeshmobile.pune@gmail.com",
-        address="Shop No 12-14, Ground Floor, Shreeram Plaza, FC Road, Shivajinagar",
-        city="Pune",
+        address="Shop No 12-14, Main Market, Roha",
+        city="Roha",
         state="Maharashtra",
         state_code="27",
-        pincode="411004",
+        pincode="402109",
         upi_id="shreeganesh@icici",
         invoice_prefix="SGM",
         thermal_printer_width="80mm",
@@ -75,7 +251,7 @@ def seed_database():
             email=u["email"],
             role_id=u["role_id"],
             phone=u["phone"],
-            pin=u["pin"]
+            pin=hash_pin(u["pin"])
         )
         db.add(user_obj)
         db.flush()
@@ -565,6 +741,7 @@ def seed_database():
     )
     db.add(audit)
 
+    ensure_store_portfolio(db)
     db.commit()
     db.close()
     print("Database seeding completed successfully!")

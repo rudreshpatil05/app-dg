@@ -8,9 +8,9 @@ from app.models.auth import User
 from app.models.party import Supplier, SupplierLedger
 from app.models.finance import Account, AccountTransaction
 from app.schemas.party import SupplierResponse, SupplierCreate, SupplierLedgerResponse, PaySupplierRequest
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/suppliers", tags=["Suppliers & Distributor Khata"])
+router = APIRouter(prefix="/suppliers", tags=["Suppliers & Distributor Khata"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "ACCOUNTANT"]))])
 
 @router.get("", response_model=List[SupplierResponse])
 def list_suppliers(

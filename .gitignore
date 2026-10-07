@@ -5,12 +5,14 @@ __pycache__/
 
 # Virtual environments
 .venv/
+backend/.server-port
 venv/
 env/
 
 # Environment variables
 .env
 .env.*
+.dev_secret_key
 
 # SQLite databases
 *.db

@@ -9,9 +9,9 @@ from app.models.party import Customer, CustomerLedger
 from app.models.finance import Account, AccountTransaction
 from app.schemas.party import CustomerResponse, CustomerCreate, CustomerLedgerResponse, ReceivePaymentRequest
 from app.services.whatsapp_service import generate_customer_statement_whatsapp_link
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/customers", tags=["Customers & Khatabook Ledger"])
+router = APIRouter(prefix="/customers", tags=["Customers & Khatabook Ledger"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "STAFF", "ACCOUNTANT"]))])
 
 @router.get("", response_model=List[CustomerResponse])
 def list_customers(

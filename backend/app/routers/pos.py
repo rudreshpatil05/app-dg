@@ -10,9 +10,9 @@ from app.models.product import SerialNumber
 from app.schemas.pos import PosSaleRequest, SaleResponse, SaleItemResponse
 from app.services.pos_service import process_pos_sale
 from app.services.whatsapp_service import generate_invoice_whatsapp_link
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/pos", tags=["Sales & POS Billing"])
+router = APIRouter(prefix="/pos", tags=["Sales & POS Billing"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "STAFF"]))])
 
 @router.post("/checkout", response_model=SaleResponse)
 def pos_checkout(
@@ -52,6 +52,11 @@ def pos_checkout(
 
         resp = SaleResponse.model_validate(sale)
         resp.whatsapp_link = wa_link
+        if sale.emi_plan:
+            resp.emi_amount = sale.emi_plan.emi_amount
+            resp.emi_duration = sale.emi_plan.number_of_installments
+            resp.emi_down_payment = sale.emi_plan.down_payment
+            resp.emi_total_repayable = sale.emi_plan.total_repayable
         
         # Mask profit if STAFF
         if current_user.role and current_user.role.code == "STAFF":
@@ -168,26 +173,36 @@ def process_sale_return(
     db.flush()
 
     for r_item in items_to_return:
-        s_item = db.query(SaleItem).filter(SaleItem.id == r_item["sale_item_id"]).first()
-        if s_item:
-            ret_item = SaleReturnItem(
-                business_id=current_user.business_id,
-                sale_return_id=sale_ret.id,
-                sale_item_id=s_item.id,
-                product_id=s_item.product_id,
-                serial_number_id=s_item.serial_number_id,
-                quantity=r_item.get("quantity", 1),
-                refund_price=r_item.get("refund_price", s_item.unit_price),
-                inspection_status="PENDING_INSPECTION",
-                notes=r_item.get("notes", "Customer return pending inspection")
-            )
-            db.add(ret_item)
+        sale_item_id = r_item.get("sale_item_id")
+        s_item = db.query(SaleItem).filter(
+            SaleItem.id == sale_item_id,
+            SaleItem.sale_id == sale.id,
+            SaleItem.business_id == current_user.business_id
+        ).first()
+        if not s_item:
+            raise HTTPException(status_code=400, detail="Sale item does not belong to this sale")
 
-            # Mark Serial status as RETURNED (not immediately sellable)
-            if s_item.serial_number_id:
-                s_num = db.query(SerialNumber).filter(SerialNumber.id == s_item.serial_number_id).first()
-                if s_num:
-                    s_num.status = "RETURNED"
+        ret_item = SaleReturnItem(
+            business_id=current_user.business_id,
+            sale_return_id=sale_ret.id,
+            sale_item_id=s_item.id,
+            product_id=s_item.product_id,
+            serial_number_id=s_item.serial_number_id,
+            quantity=r_item.get("quantity", 1),
+            refund_price=r_item.get("refund_price", s_item.unit_price),
+            inspection_status="PENDING_INSPECTION",
+            notes=r_item.get("notes", "Customer return pending inspection")
+        )
+        db.add(ret_item)
+
+        # Mark Serial status as RETURNED (not immediately sellable).
+        if s_item.serial_number_id:
+            s_num = db.query(SerialNumber).filter(
+                SerialNumber.id == s_item.serial_number_id,
+                SerialNumber.business_id == current_user.business_id
+            ).first()
+            if s_num:
+                s_num.status = "RETURNED"
 
     db.commit()
     return {"success": True, "return_number": ret_number, "status": "RETURNED_PENDING_INSPECTION"}

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
+import LoginView from './components/auth/LoginView';
 import Navbar from './components/layout/Navbar';
 import Sidebar from './components/layout/Sidebar';
 import DashboardView from './components/dashboard/DashboardView';
@@ -19,17 +20,22 @@ import ReportsView from './components/reports/ReportsView';
 import SettingsView from './components/settings/SettingsView';
 
 function MainLayout() {
-  const { activeTab } = useApp();
+  const { activeTab, setActiveTab, canAccess } = useApp();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    if (!canAccess(activeTab)) setActiveTab('dashboard');
+  }, [activeTab, canAccess, setActiveTab]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100">
       {/* Sidebar Navigation */}
-      <Sidebar />
+      <Sidebar mobileNavOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
 
       {/* Main App Canvas */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Navbar */}
-        <Navbar />
+        <Navbar onOpenMenu={() => setMobileNavOpen(true)} />
 
         {/* Tab Canvas Content */}
         <main className="flex-1 overflow-y-auto">
@@ -47,7 +53,7 @@ function MainLayout() {
           {activeTab === 'repairs' && <RepairsView />}
           {activeTab === 'warranty' && <WarrantyView />}
           {activeTab === 'reports' && <ReportsView />}
-          {activeTab === 'settings' && <SettingsView />}
+          {activeTab === 'settings' && canAccess('settings') && <SettingsView />}
         </main>
       </div>
     </div>
@@ -57,7 +63,15 @@ function MainLayout() {
 export default function App() {
   return (
     <AppProvider>
-      <MainLayout />
+      <AuthenticatedApp />
     </AppProvider>
   );
+}
+
+function AuthenticatedApp() {
+  const { isAuthenticated } = useApp();
+
+  if (!isAuthenticated) return <LoginView />;
+
+  return <MainLayout />;
 }

@@ -160,12 +160,14 @@ export default function InventoryView() {
               Serialized IMEIs ({serials.length})
             </button>
           </div>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Add Product
-          </button>
+          {!isStaff && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> Add Product
+            </button>
+          )}
         </div>
       </div>
 
@@ -325,17 +327,19 @@ export default function InventoryView() {
                       </span>
                     </td>
                     <td className="p-3.5 text-center">
-                      <select
-                        value={s.status}
-                        onChange={(e) => handleUpdateStatus(s.id, e.target.value)}
-                        className="text-[11px] bg-white border border-slate-200 rounded px-2 py-1 font-semibold outline-none"
-                      >
-                        <option value="IN_STOCK">In Stock</option>
-                        <option value="SOLD">Sold</option>
-                        <option value="RETURNED">Returned</option>
-                        <option value="DAMAGED">Damaged</option>
-                        <option value="UNDER_REPAIR">Under Repair</option>
-                      </select>
+                      {!isStaff && (
+                        <select
+                          value={s.status}
+                          onChange={(e) => handleUpdateStatus(s.id, e.target.value)}
+                          className="text-[11px] bg-white border border-slate-200 rounded px-2 py-1 font-semibold outline-none"
+                        >
+                          <option value="IN_STOCK">In Stock</option>
+                          <option value="SOLD">Sold</option>
+                          <option value="RETURNED">Returned</option>
+                          <option value="DAMAGED">Damaged</option>
+                          <option value="UNDER_REPAIR">Under Repair</option>
+                        </select>
+                      )}
                     </td>
                   </tr>
                 ))}

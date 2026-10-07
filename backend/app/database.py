@@ -2,20 +2,21 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
-# Configure SQLite or PostgreSQL
+# Configure SQLite for local development or MySQL for shared environments.
 connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
+is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+is_mysql = settings.DATABASE_URL.startswith("mysql")
+if is_sqlite:
     connect_args = {"check_same_thread": False}
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args,
-    echo=False,
-    future=True
-)
+engine_options = {"connect_args": connect_args, "echo": False, "future": True}
+if is_mysql:
+    engine_options.update({"pool_pre_ping": True, "pool_recycle": 1800})
+
+engine = create_engine(settings.DATABASE_URL, **engine_options)
 
 # Enable SQLite foreign key enforcement and WAL mode
-if settings.DATABASE_URL.startswith("sqlite"):
+if is_sqlite:
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()

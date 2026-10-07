@@ -1,15 +1,14 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
-  Search, Shield, UserCheck, Bell, Smartphone, 
-  Wallet, PlusCircle, AlertTriangle, CheckCircle, X, Sparkles
+  Search, Shield, Bell, Smartphone, PlusCircle, AlertTriangle, CheckCircle, X, LogOut, Menu
 } from 'lucide-react';
 import { api } from '../../api/client';
 
-export default function Navbar() {
+export default function Navbar({ onOpenMenu }) {
   const { 
-    business, currentRole, switchRole, staffList, 
-    setActiveTab, notifications, formatINR, showToast 
+    business, currentRole, currentUser, staffList, availableBusinesses, activeBusinessId, switchBusiness,
+    setActiveTab, notifications, formatINR, showToast, logout
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,10 +16,8 @@ export default function Navbar() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchResult, setSearchResult] = useState(null);
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [targetRole, setTargetRole] = useState(null);
-  const [enteredPin, setEnteredPin] = useState('');
   const [showNotifDrawer, setShowNotifDrawer] = useState(false);
+  const [switchingBusiness, setSwitchingBusiness] = useState(false);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -37,27 +34,6 @@ export default function Navbar() {
     }
   };
 
-  const handleRoleSelect = (roleCode) => {
-    setShowRoleDropdown(false);
-    if (roleCode === 'OWNER' && currentRole !== 'OWNER') {
-      setTargetRole('OWNER');
-      setShowPinModal(true);
-      setEnteredPin('');
-    } else {
-      switchRole(roleCode);
-    }
-  };
-
-  const verifyPinAndSwitch = () => {
-    if (enteredPin === '1234' || enteredPin === '2222' || enteredPin === '3333' || enteredPin === '4444') {
-      switchRole(targetRole);
-      setShowPinModal(false);
-      setEnteredPin('');
-    } else {
-      showToast('Incorrect Staff PIN (Try 1234 for Owner, 3333 for Staff)', 'error');
-    }
-  };
-
   const getRoleBadgeColor = (role) => {
     switch (role) {
       case 'OWNER': return 'bg-purple-100 text-purple-800 border-purple-300';
@@ -68,13 +44,33 @@ export default function Navbar() {
     }
   };
 
+  const handleBusinessSelect = async (businessId) => {
+    setShowRoleDropdown(false);
+    if (String(businessId) === String(activeBusinessId)) return;
+    setSwitchingBusiness(true);
+    try {
+      await switchBusiness(businessId);
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setSwitchingBusiness(false);
+    }
+  };
+
   return (
     <>
       <header className="sticky top-0 z-40 bg-white border-b border-slate-200 px-4 lg:px-6 py-2.5 flex items-center justify-between shadow-sm">
         {/* Left: Store identity */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white font-bold shadow-md">
-            <Smartphone className="w-5 h-5" />
+          <button aria-label="Open navigation" onClick={onOpenMenu} className="p-2 -ml-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg lg:hidden">
+            <Menu className="w-5 h-5" />
+          </button>
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
+            {business.logo_url ? (
+              <img src={business.logo_url} alt={`${business.name} logo`} className="w-full h-full object-cover" />
+            ) : (
+              <Smartphone className="w-5 h-5" />
+            )}
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -124,6 +120,10 @@ export default function Navbar() {
             <span>Counter POS</span>
           </button>
 
+          <span className="hidden xl:inline max-w-40 truncate text-xs font-semibold text-slate-600" title={currentUser?.full_name || 'Loading profile'}>
+            {currentUser?.full_name || 'Loading profile...'}
+          </span>
+
           {/* Quick Counter Role Switcher */}
           <div className="relative">
             <button
@@ -141,24 +141,32 @@ export default function Navbar() {
                 <div className="px-3 py-1.5 border-b border-slate-100">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Terminal Access Mode</p>
                 </div>
-                {[
-                  { code: 'OWNER', label: 'Store Owner', desc: 'Full profits, audit logs & settings' },
-                  { code: 'MANAGER', label: 'Store Manager', desc: 'Sales, purchases & stock' },
-                  { code: 'STAFF', label: 'Counter Staff', desc: 'Fast billing, profits masked' },
-                  { code: 'ACCOUNTANT', label: 'Accountant', desc: 'GST, cash & expenses' },
-                ].map((item) => (
-                  <button
-                    key={item.code}
-                    onClick={() => handleRoleSelect(item.code)}
-                    className={`w-full text-left px-3 py-2 text-xs flex flex-col hover:bg-slate-50 transition-colors ${currentRole === item.code ? 'bg-emerald-50/70' : ''}`}
+                <div className="px-3 py-2 border-b border-slate-100">
+                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Current Store</p>
+                  <select
+                    value={activeBusinessId || ''}
+                    disabled={switchingBusiness || availableBusinesses.length < 2}
+                    onChange={(e) => handleBusinessSelect(e.target.value)}
+                    className="w-full text-xs font-semibold text-slate-800 border border-slate-200 rounded-md px-2 py-1.5 bg-slate-50 outline-none focus:border-emerald-500"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-800">{item.label}</span>
-                      {currentRole === item.code && <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />}
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-0.5">{item.desc}</span>
-                  </button>
-                ))}
+                    {availableBusinesses.map((store) => (
+                      <option key={store.id} value={store.id}>{store.name} - {store.city}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-1 truncate">{business.city}, {business.state}</p>
+                  <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">● {business.is_active ? 'Active' : 'Inactive'}</p>
+                </div>
+                <div className="px-3 py-2 border-b border-slate-100">
+                  <p className="text-xs font-semibold text-slate-800 truncate">{currentUser?.full_name || 'Authenticated user'}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Signed in as {currentRole}</p>
+                </div>
+                <button
+                  onClick={() => { setShowRoleDropdown(false); logout(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign out
+                </button>
               </div>
             )}
           </div>
@@ -266,39 +274,6 @@ export default function Navbar() {
                   <p className="text-xs text-slate-500 mt-1">No product matches IMEI/barcode "{searchQuery}" in your inventory.</p>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Staff PIN Verification Modal */}
-      {showPinModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xs w-full shadow-2xl p-5 border border-slate-200">
-            <h3 className="font-bold text-slate-900 text-sm text-center">Store Owner PIN</h3>
-            <p className="text-xs text-slate-500 text-center mt-1">Enter PIN to access Owner Mode (Default: 1234)</p>
-            <input
-              type="password"
-              maxLength={6}
-              value={enteredPin}
-              onChange={(e) => setEnteredPin(e.target.value)}
-              placeholder="••••"
-              autoFocus
-              className="w-full text-center text-xl tracking-widest font-mono py-2 mt-4 bg-slate-50 border border-slate-300 rounded-lg focus:border-emerald-500 outline-none"
-            />
-            <div className="flex gap-2 mt-4">
-              <button
-                onClick={() => setShowPinModal(false)}
-                className="flex-1 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={verifyPinAndSwitch}
-                className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold"
-              >
-                Authorize
-              </button>
             </div>
           </div>
         </div>

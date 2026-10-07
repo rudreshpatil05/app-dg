@@ -40,8 +40,12 @@ export default function SettingsView() {
     }
   };
 
-  const handleDownloadBackup = () => {
-    window.open(api.getBackupExportUrl(), '_blank');
+  const handleDownloadBackup = async () => {
+    try {
+      await api.downloadBackup();
+    } catch (err) {
+      showToast(err.message || 'Could not generate backup', 'error');
+    }
   };
 
   return (

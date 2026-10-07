@@ -5,6 +5,42 @@ from app.models.emi import EmiPlan, EmiInstallment, EmiPayment
 from app.models.party import Customer, CustomerLedger
 from app.models.finance import Account, AccountTransaction
 
+OPEN_INSTALLMENT_STATUSES = {"PENDING", "DUE_TODAY", "OVERDUE", "PARTIAL"}
+
+
+def sync_emi_statuses(db: Session, business_id: int, today: datetime.date | None = None) -> bool:
+    """Synchronize open installment labels with the current date."""
+    current_date = today or datetime.date.today()
+    changed = False
+    plans = db.query(EmiPlan).filter(EmiPlan.business_id == business_id).all()
+
+    for plan in plans:
+        for installment in plan.installments:
+            if installment.status == "PAID" or installment.balance_due <= 0:
+                if installment.status != "PAID":
+                    installment.status = "PAID"
+                    installment.balance_due = 0.0
+                    changed = True
+                continue
+
+            next_status = "OVERDUE" if installment.due_date < current_date else (
+                "DUE_TODAY" if installment.due_date == current_date else "PARTIAL" if installment.paid_amount > 0 else "PENDING"
+            )
+            if installment.status != next_status:
+                installment.status = next_status
+                changed = True
+
+        if plan.balance_remaining <= 0 and plan.status != "COMPLETED":
+            plan.status = "COMPLETED"
+            changed = True
+        elif plan.balance_remaining > 0 and plan.status == "COMPLETED":
+            plan.status = "ACTIVE"
+            changed = True
+
+    if changed:
+        db.commit()
+    return changed
+
 def calculate_emi_plan_details(
     financed_principal: float,
     annual_interest_rate: float,
@@ -15,18 +51,24 @@ def calculate_emi_plan_details(
     Calculates EMI details for Indian retail store financing.
     Supports 0% interest schemes (very common in Indian mobile retail) or flat/reducing rate.
     """
+    if financed_principal < 0:
+        raise ValueError("Financed amount cannot be negative")
+    if annual_interest_rate < 0:
+        raise ValueError("Interest rate cannot be negative")
+    if processing_fee < 0:
+        raise ValueError("Processing fee cannot be negative")
     if months <= 0:
-        months = 1
+        raise ValueError("EMI duration must be greater than zero")
 
     if annual_interest_rate == 0:
         total_interest = 0.0
         total_repayable = financed_principal + processing_fee
-        base_emi = round(financed_principal / months, 2)
+        base_emi = round(total_repayable / months, 2)
     else:
         # Simple interest calculation common for store-financing
         total_interest = round((financed_principal * annual_interest_rate * (months / 12.0)) / 100.0, 2)
         total_repayable = financed_principal + total_interest + processing_fee
-        base_emi = round((financed_principal + total_interest) / months, 2)
+        base_emi = round(total_repayable / months, 2)
 
     return {
         "financed_principal": financed_principal,
@@ -47,9 +89,7 @@ def create_emi_installments(
     Generates exact installment schedule with rupee reconciliation on the last installment.
     """
     months = emi_plan.number_of_installments
-    principal_pool = emi_plan.financed_principal
-    interest_pool = emi_plan.interest_amount
-    total_repayable = emi_plan.financed_principal + emi_plan.interest_amount
+    total_repayable = emi_plan.total_repayable
     
     monthly_emi = round(total_repayable / months, 2)
     accumulated_emi = 0.0
@@ -100,6 +140,10 @@ def collect_emi_payment(
         raise ValueError("EMI Plan not found")
 
     customer = db.query(Customer).filter(Customer.id == plan.customer_id).first()
+    if amount <= 0:
+        raise ValueError("Payment amount must be greater than zero")
+
+    sync_emi_statuses(db, plan.business_id, payment_date)
     
     # Target specific installment or oldest pending installment
     target_installment = None
@@ -112,8 +156,15 @@ def collect_emi_payment(
     if not target_installment:
         target_installment = db.query(EmiInstallment).filter(
             EmiInstallment.emi_plan_id == emi_plan_id,
-            EmiInstallment.status.in_(["PENDING", "OVERDUE", "PARTIAL"])
+            EmiInstallment.status.in_(OPEN_INSTALLMENT_STATUSES)
         ).order_by(EmiInstallment.installment_number.asc()).first()
+
+    if not target_installment:
+        raise ValueError("No pending EMI installment found")
+    if target_installment.status == "PAID" or target_installment.balance_due <= 0:
+        raise ValueError("This EMI installment is already paid")
+    if amount > target_installment.balance_due + 0.01:
+        raise ValueError("Payment cannot exceed the installment balance")
 
     # Create Payment record
     payment = EmiPayment(
@@ -131,14 +182,14 @@ def collect_emi_payment(
     db.add(payment)
 
     # Update installment status
-    if target_installment:
-        target_installment.paid_amount += amount
-        target_installment.balance_due = max(0.0, target_installment.emi_amount - target_installment.paid_amount)
-        if target_installment.balance_due == 0:
-            target_installment.status = "PAID"
-            target_installment.paid_date = payment_date
-        else:
-            target_installment.status = "PARTIAL"
+    target_installment.paid_amount += amount
+    target_installment.balance_due = max(0.0, target_installment.emi_amount - target_installment.paid_amount)
+    if target_installment.balance_due <= 0.01:
+        target_installment.balance_due = 0.0
+        target_installment.status = "PAID"
+        target_installment.paid_date = payment_date
+    else:
+        target_installment.status = "PARTIAL"
 
     # Update plan totals
     plan.total_paid += amount

@@ -9,9 +9,9 @@ from app.models.product import Product, SerialNumber, StockMovement
 from app.models.party import Supplier, SupplierLedger
 from app.models.finance import Account, AccountTransaction
 from app.schemas.purchase import PurchaseCreateRequest, PurchaseResponse, PurchaseItemResponse
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/purchases", tags=["Purchases & Inward Stock"])
+router = APIRouter(prefix="/purchases", tags=["Purchases & Inward Stock"], dependencies=[Depends(require_role(["OWNER", "MANAGER"]))])
 
 @router.get("", response_model=List[PurchaseResponse])
 def list_purchases(
@@ -76,6 +76,10 @@ def create_purchase(
         })
 
     grand_total = max(0.0, (subtotal + gst_total) - req.discount)
+    if req.discount > subtotal + gst_total:
+        raise HTTPException(status_code=400, detail="Discount cannot exceed purchase total")
+    if req.paid_amount > grand_total + 0.01:
+        raise HTTPException(status_code=400, detail="Paid amount cannot exceed purchase total")
     balance_due = max(0.0, grand_total - req.paid_amount)
     pmt_status = "PAID" if balance_due <= 0.01 else ("PARTIAL" if req.paid_amount > 0 else "UNPAID")
 

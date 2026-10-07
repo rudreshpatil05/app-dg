@@ -12,9 +12,9 @@ from app.schemas.finance import (
 from app.services.accounting_service import (
     get_daily_cash_reconciliation_summary, record_cash_reconciliation
 )
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/finance", tags=["Expenses, Cash & Bank Reconciliation"])
+router = APIRouter(prefix="/finance", tags=["Expenses, Cash & Bank Reconciliation"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "ACCOUNTANT"]))])
 
 @router.get("/expense-categories", response_model=List[ExpenseCategoryResponse])
 def list_expense_categories(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

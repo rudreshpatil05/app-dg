@@ -11,9 +11,9 @@ from app.models.emi import EmiInstallment, EmiPlan
 from app.models.finance import Expense, Account
 from app.models.specialized import RepairTicket, WarrantyRecord
 from app.models.audit import Notification
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard & Business Analytics"])
+router = APIRouter(prefix="/dashboard", tags=["Dashboard & Business Analytics"], dependencies=[Depends(require_role(["OWNER", "MANAGER", "STAFF", "ACCOUNTANT"]))])
 
 @router.get("/summary")
 def get_dashboard_summary(

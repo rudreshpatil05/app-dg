@@ -85,10 +85,17 @@ def process_pos_sale(
             raise ValueError(f"Product ID {product_id} not found")
 
         quantity = item.get("quantity", 1)
+        if not isinstance(quantity, int) or quantity < 1:
+            raise ValueError("Quantity must be at least 1")
         unit_price = item.get("unit_price", product.selling_price)
         unit_mrp = item.get("unit_mrp", product.mrp or unit_price)
         item_discount = item.get("discount", 0.0)
         gst_rate = item.get("gst_rate", product.gst_rate)
+
+        if unit_price < 0 or unit_mrp < 0 or item_discount < 0 or not 0 <= gst_rate <= 100:
+            raise ValueError("Invalid price, discount, or GST value")
+        if item_discount > unit_price * quantity:
+            raise ValueError(f"Discount cannot exceed the value of {product.name}")
         
         serial_number_id = item.get("serial_number_id")
         serial_obj = None
@@ -123,6 +130,9 @@ def process_pos_sale(
             if not serial_obj:
                 raise ValueError(f"Serial record {serial_number_id} not found")
 
+            if serial_obj.product_id != product.id:
+                raise ValueError("Serial record does not belong to the selected product")
+
             if serial_obj.status != "IN_STOCK":
                 raise ValueError(f"Device with IMEI {serial_obj.imei1 or serial_obj.serial_number} is already {serial_obj.status}!")
 
@@ -133,8 +143,7 @@ def process_pos_sale(
             quantity = 1  # Serialized devices are sold 1-by-1 per IMEI
         else:
             if product.current_stock < quantity:
-                # Warning or check stock for accessories
-                pass
+                raise ValueError(f"Insufficient stock for {product.name}")
 
         # GST Calculations (Indian Retail: prices are inclusive of GST at POS counter)
         item_subtotal = (unit_price * quantity) - item_discount
@@ -195,6 +204,8 @@ def process_pos_sale(
 
     # 4. Final Totals
     effective_discount = total_item_discounts + discount_amount
+    if effective_discount > subtotal + 0.01:
+        raise ValueError("Total discount cannot exceed the sale subtotal")
     grand_total = max(0.0, round(subtotal - effective_discount, 2))
     final_payable = max(0.0, round(grand_total - exchange_deduction, 2))
 
@@ -209,6 +220,22 @@ def process_pos_sale(
                 payment_records.append(p)
 
     balance_due = max(0.0, round(final_payable - total_paid, 2))
+
+    if total_paid > final_payable + 0.01:
+        raise ValueError("Total payments cannot exceed the sale total")
+
+    if emi_details and emi_details.get("number_of_installments", 0) > 0:
+        months = int(emi_details.get("number_of_installments", 0))
+        interest_rate = float(emi_details.get("interest_rate", 0.0))
+        processing_fee = float(emi_details.get("processing_fee", 0.0))
+        if not customer:
+            raise ValueError("A customer with a valid phone number is required for EMI")
+        if total_paid < 0 or total_paid > final_payable + 0.01:
+            raise ValueError("Down payment must be between zero and the sale total")
+        if months not in {3, 6, 9, 12, 15, 18, 24}:
+            raise ValueError("EMI duration must be 3, 6, 9, 12, 15, 18, or 24 months")
+        if interest_rate < 0 or processing_fee < 0:
+            raise ValueError("Interest rate and processing fee cannot be negative")
     
     # Determine Payment Type & Status
     payment_status = "PAID" if balance_due <= 0.01 else ("PARTIAL" if total_paid > 0 else "UNPAID")
@@ -441,6 +468,12 @@ def process_pos_sale(
             processing_fee=processing_fee
         )
 
+        emi_notes = emi_details.get("notes")
+        finance_provider = emi_details.get("finance_provider")
+        if finance_provider:
+            provider_note = f"Finance provider: {finance_provider}"
+            emi_notes = f"{provider_note}; {emi_notes}" if emi_notes else provider_note
+
         emi_plan = EmiPlan(
             business_id=business_id,
             sale_id=sale.id,
@@ -461,7 +494,7 @@ def process_pos_sale(
             total_paid=0.0,
             balance_remaining=emi_calc["total_repayable"],
             status="ACTIVE",
-            notes=emi_details.get("notes")
+            notes=emi_notes
         )
         db.add(emi_plan)
         db.flush()

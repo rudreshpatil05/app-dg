@@ -31,7 +31,7 @@ class ExchangeInput(BaseModel):
     final_exchange_value: float
 
 class PaymentSplitInput(BaseModel):
-    payment_method: str # CASH, UPI, CARD, BANK, CREDIT, EMI
+    payment_method: str # CASH, UPI, CARD, BANK_TRANSFER, CREDIT, EMI
     amount: float = Field(ge=0)
     reference_number: Optional[str] = None
 
@@ -51,6 +51,7 @@ class PosSaleRequest(BaseModel):
     payments: List[PaymentSplitInput]
     emi_details: Optional[EmiInput] = None
     notes: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=100)
 
 class SaleItemResponse(BaseModel):
     id: int

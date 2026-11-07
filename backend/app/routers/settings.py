@@ -1,14 +1,10 @@
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+import datetime
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.auth import User, Business
 from app.models.audit import AuditLog, Notification
-from app.models.sale import Sale
-from app.models.product import Product, SerialNumber
-from app.models.party import Customer, Supplier
-from app.models.finance import Expense, Account
-from app.models.emi import EmiPlan
 from app.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/settings", tags=["Settings, Audit Logs & Backups"])
@@ -91,27 +87,43 @@ def full_backup_export(
     """
     biz_id = current_user.business_id
     biz = db.query(Business).filter(Business.id == biz_id).first()
-    products = db.query(Product).filter(Product.business_id == biz_id).all()
-    customers = db.query(Customer).filter(Customer.business_id == biz_id).all()
-    suppliers = db.query(Supplier).filter(Supplier.business_id == biz_id).all()
-    sales = db.query(Sale).filter(Sale.business_id == biz_id).all()
-    expenses = db.query(Expense).filter(Expense.business_id == biz_id).all()
-    accounts = db.query(Account).filter(Account.business_id == biz_id).all()
+    from app.database import Base
+    from app.models.auth import User
 
-    return {
-        "version": "1.0",
-        "exported_at": str(db.query(Sale.created_at).first() or ""),
+    models = {}
+    for mapper in Base.registry.mappers:
+        model = mapper.class_
+        if model is User or not hasattr(model, "business_id"):
+            continue
+        models[model.__tablename__] = model
+
+    def serialize(value):
+        if isinstance(value, (datetime.date, datetime.datetime)):
+            return value.isoformat()
+        return value
+
+    payload = {
+        "version": "2.0",
+        "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "business": {
+            "id": biz.id,
             "name": biz.name,
             "gstin": biz.gstin,
             "phone": biz.phone,
             "city": biz.city
         },
-        "counts": {
-            "products": len(products),
-            "customers": len(customers),
-            "suppliers": len(suppliers),
-            "sales": len(sales),
-            "expenses": len(expenses)
-        }
+        "tables": {}
     }
+    for name, model in models.items():
+        rows = db.query(model).filter(model.business_id == biz_id).all()
+        payload["tables"][name] = [
+            {column.name: serialize(getattr(row, column.name)) for column in model.__table__.columns}
+            for row in rows
+        ]
+
+    content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="dg-retail-backup.json"'}
+    )

@@ -1,64 +1,44 @@
-@"
-# =========================
-# Python
-# =========================
+﻿# Python
 __pycache__/
 *.py[cod]
-*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
 # Virtual environments
 .venv/
+.venv-1/
 venv/
 env/
-ENV/
 
-# =========================
-# Environment / Secrets
-# =========================
+# Secrets
 .env
 .env.*
 !.env.example
-
 .dev_secret_key
 .server-port
 
-# =========================
-# Databases
-# =========================
+# Databases and local data
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
 
-# =========================
-# Logs
-# =========================
-*.log
-logs/
-
-# =========================
-# Node / React
-# =========================
+# Node and frontend build
 node_modules/
+frontend/node_modules/
 frontend/dist/
 dist/
 
-# =========================
-# IDE / OS
-# =========================
+# IDE and OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# =========================
-# Temporary files
-# =========================
+# Logs and temporary files
+*.log
 *.tmp
 *.temp
 *.bak
-"@ | Set-Content .gitignore

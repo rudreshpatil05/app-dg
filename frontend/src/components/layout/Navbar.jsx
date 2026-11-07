@@ -117,7 +117,7 @@ export default function Navbar({ onOpenMenu }) {
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-transform active:scale-95"
           >
             <PlusCircle className="w-3.5 h-3.5" />
-            <span>Counter POS</span>
+            <span>Scan & Sell</span>
           </button>
 
           <span className="hidden xl:inline max-w-40 truncate text-xs font-semibold text-slate-600" title={currentUser?.full_name || 'Loading profile'}>

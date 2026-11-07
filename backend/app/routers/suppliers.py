@@ -65,7 +65,7 @@ def get_supplier(
     supplier = db.query(Supplier).filter(
         Supplier.id == supplier_id,
         Supplier.business_id == current_user.business_id
-    ).first()
+    ).with_for_update().first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     return SupplierResponse.model_validate(supplier)
@@ -99,6 +99,8 @@ def pay_supplier(
     amount = float(req.amount)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+    if amount > supplier.current_balance + 0.01:
+        raise HTTPException(status_code=400, detail="Payment cannot exceed supplier payable balance")
 
     supplier.total_paid += amount
     supplier.current_balance = max(0.0, supplier.current_balance - amount)

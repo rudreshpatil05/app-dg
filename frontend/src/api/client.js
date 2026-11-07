@@ -110,6 +110,9 @@ export const api = {
     return apiRequest(`/pos/sales${query ? `?${query}` : ''}`);
   },
   getSaleDetails: (saleId) => apiRequest(`/pos/sales/${saleId}`),
+  downloadSalePdf: async (saleId) => {
+    await downloadFile(`/pos/sales/${saleId}/pdf`, `invoice-${saleId}.pdf`, 'Unable to download invoice PDF');
+  },
   returnSale: (saleId, returnData) => apiRequest(`/pos/sales/${saleId}/return`, 'POST', returnData),
 
   // Customers & Khatabook

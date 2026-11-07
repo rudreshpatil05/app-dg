@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.database import engine, Base
+from app.database import engine, Base, ensure_runtime_schema_compatibility
 from app.seed import seed_database
 import app.models
 from app.routers import (
@@ -12,6 +12,7 @@ from app.routers import (
 # reviewed migration against the configured MySQL database.
 if settings.ENVIRONMENT.lower() != "production":
     Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema_compatibility()
 if settings.ENVIRONMENT.lower() == "development" or (
     settings.ENVIRONMENT.lower() == "staging" and settings.SEED_DATABASE
 ):

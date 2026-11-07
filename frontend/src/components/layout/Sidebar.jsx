@@ -13,7 +13,7 @@ export default function Sidebar({ mobileNavOpen, onClose }) {
   const navGroups = [
     { label: 'Overview', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
     { label: 'Sales', items: [
-      { id: 'pos', label: 'Counter POS', icon: ShoppingCart, badge: 'Fast', badgeColor: 'bg-emerald-500 text-white' },
+      { id: 'pos', label: 'Scan & Sell', icon: ShoppingCart, badge: 'Fast', badgeColor: 'bg-emerald-500 text-white' },
       { id: 'sales', label: 'Sales & Invoices', icon: Receipt }
     ] },
     { label: 'Inventory', items: [{ id: 'inventory', label: 'Inventory & IMEIs', icon: Package }] },

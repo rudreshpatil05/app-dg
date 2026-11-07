@@ -1,6 +1,8 @@
 import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from app.models.sale import Sale, SaleItem, SalePayment
+from app.models.auth import Business
 from app.models.product import Product, ProductVariant, SerialNumber, StockMovement
 from app.models.party import Customer, CustomerLedger
 from app.models.finance import Account, AccountTransaction
@@ -18,7 +20,13 @@ def generate_invoice_number(db: Session, business_id: int, prefix: str = "INV") 
         Sale.business_id == business_id,
         Sale.invoice_number.like(f"{prefix}-{today_str}-%")
     ).count()
-    return f"{prefix}-{today_str}-{count_today + 1:04d}"
+    candidate = count_today + 1
+    while db.query(Sale.id).filter(
+        Sale.business_id == business_id,
+        Sale.invoice_number == f"{prefix}-{today_str}-{candidate:04d}"
+    ).first():
+        candidate += 1
+    return f"{prefix}-{today_str}-{candidate:04d}"
 
 def process_pos_sale(
     db: Session,
@@ -33,13 +41,35 @@ def process_pos_sale(
     exchange_device_data: dict | None = None,
     payments_data: list[dict] | None = None,
     emi_details: dict | None = None,
-    notes: str | None = None
+    notes: str | None = None,
+    idempotency_key: str | None = None
 ) -> Sale:
     """
     Executes an atomic POS transaction connecting Sales, Inventory, IMEI, Accounting, Khata, and EMI.
     """
     if not items_data:
         raise ValueError("Cart cannot be empty")
+
+    business = db.query(Business).filter(Business.id == business_id).with_for_update().first()
+    if not business:
+        raise ValueError("Business not found")
+
+    if idempotency_key:
+        existing_sale = db.query(Sale).filter(
+            Sale.business_id == business_id,
+            Sale.idempotency_key == idempotency_key
+        ).first()
+        if existing_sale:
+            return existing_sale
+
+    allowed_payment_methods = {"CASH", "UPI", "CARD", "BANK", "BANK_TRANSFER", "CREDIT", "EMI"}
+    if user_role == "STAFF" and (
+        float(discount_amount or 0) > 0
+        or any(float(item.get("discount", 0) or 0) > 0 for item in items_data)
+    ):
+        raise ValueError("Discounts require manager or owner authorization")
+    if float(discount_amount or 0) < 0:
+        raise ValueError("Discount cannot be negative")
 
     # 1. Resolve or Create Customer
     customer = None
@@ -80,17 +110,31 @@ def process_pos_sale(
     
     for item in items_data:
         product_id = item["product_id"]
-        product = db.query(Product).filter(Product.id == product_id, Product.business_id == business_id).first()
+        product = db.query(Product).filter(
+            Product.id == product_id,
+            Product.business_id == business_id,
+            Product.is_active == True
+        ).with_for_update().first()
         if not product:
             raise ValueError(f"Product ID {product_id} not found")
 
         quantity = item.get("quantity", 1)
         if not isinstance(quantity, int) or quantity < 1:
             raise ValueError("Quantity must be at least 1")
-        unit_price = item.get("unit_price", product.selling_price)
-        unit_mrp = item.get("unit_mrp", product.mrp or unit_price)
+        catalog_price = float(product.selling_price)
+        submitted_price = item.get("unit_price")
+        if user_role in {"OWNER", "MANAGER"} and submitted_price is not None:
+            unit_price = float(submitted_price)
+            if unit_price > float(product.mrp or unit_price):
+                raise ValueError(f"Price cannot exceed MRP for {product.name}")
+        else:
+            if submitted_price is not None and abs(float(submitted_price) - catalog_price) > 0.01:
+                raise ValueError(f"Price override requires manager or owner authorization for {product.name}")
+            unit_price = catalog_price
+        unit_mrp = float(product.mrp or unit_price)
         item_discount = item.get("discount", 0.0)
-        gst_rate = item.get("gst_rate", product.gst_rate)
+        submitted_gst_rate = item.get("gst_rate")
+        gst_rate = float(submitted_gst_rate) if user_role in {"OWNER", "MANAGER"} and submitted_gst_rate is not None else float(product.gst_rate)
 
         if unit_price < 0 or unit_mrp < 0 or item_discount < 0 or not 0 <= gst_rate <= 100:
             raise ValueError("Invalid price, discount, or GST value")
@@ -199,6 +243,8 @@ def process_pos_sale(
     # 3. Handle Exchange Phone Deduction
     exchange_deduction = 0.0
     exchange_device_obj = None
+    if exchange_device_data and float(exchange_device_data.get("final_exchange_value", 0) or 0) < 0:
+        raise ValueError("Exchange value cannot be negative")
     if exchange_device_data and exchange_device_data.get("final_exchange_value", 0) > 0:
         exchange_deduction = float(exchange_device_data["final_exchange_value"])
 
@@ -217,7 +263,10 @@ def process_pos_sale(
             amt = float(p.get("amount", 0.0))
             if amt > 0:
                 total_paid += amt
-                payment_records.append(p)
+                method = str(p.get("payment_method", "")).upper()
+                if method not in allowed_payment_methods:
+                    raise ValueError(f"Unsupported payment method: {method}")
+                payment_records.append({**p, "payment_method": method})
 
     balance_due = max(0.0, round(final_payable - total_paid, 2))
 
@@ -254,12 +303,13 @@ def process_pos_sale(
     gross_profit = round((grand_total - (total_tax if is_gst_invoice else 0.0)) - total_cogs, 2)
 
     # 7. Create Sale
-    inv_number = generate_invoice_number(db, business_id)
+    inv_number = generate_invoice_number(db, business_id, business.invoice_prefix or "INV")
     sale = Sale(
         business_id=business_id,
         customer_id=customer.id if customer else None,
         user_id=user_id,
         invoice_number=inv_number,
+        idempotency_key=idempotency_key,
         invoice_date=datetime.date.today(),
         is_gst_invoice=is_gst_invoice,
         customer_name=customer.name if customer else customer_name,

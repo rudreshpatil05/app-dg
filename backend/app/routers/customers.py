@@ -78,7 +78,7 @@ def get_customer_details(
     cust = db.query(Customer).filter(
         Customer.id == customer_id,
         Customer.business_id == current_user.business_id
-    ).first()
+    ).with_for_update().first()
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
     return CustomerResponse.model_validate(cust)
@@ -117,7 +117,9 @@ def receive_customer_payment(
         raise HTTPException(status_code=400, detail="Amount must be greater than zero")
 
     cust.total_paid += amount
-    cust.current_balance = max(0.0, cust.current_balance - amount)
+    # Preserve negative balances as customer advances instead of silently
+    # discarding overpayments.
+    cust.current_balance = round(cust.current_balance - amount, 2)
 
     # Customer Ledger Entry (You Got / Credit)
     ledger = CustomerLedger(

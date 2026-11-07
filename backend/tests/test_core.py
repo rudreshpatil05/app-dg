@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from app.database import Base
 from app.models import (
     Business, Role, User, Category, Product, SerialNumber, Customer,
-    Account, ExpenseCategory, Expense, EmiPlan
+    Account, ExpenseCategory, Expense, EmiPlan, Sale, Supplier
 )
 from app.services.pos_service import process_pos_sale
 from app.services.emi_service import calculate_emi_plan_details, create_emi_installments
@@ -20,8 +20,14 @@ from app.auth import _scope_user, hash_password, ActiveUserContext, require_role
 from app.routers.auth import login
 from app.routers.emi import collect_plan_emi
 from app.routers.reports import get_sales_report
+from app.routers.customers import receive_customer_payment
+from app.routers.suppliers import pay_supplier
+from app.routers.purchases import create_purchase
+from app.routers.settings import full_backup_export
 from app.schemas.auth import LoginRequest
 from app.schemas.emi import CollectEmiRequest
+from app.schemas.party import ReceivePaymentRequest, PaySupplierRequest
+from app.schemas.purchase import PurchaseCreateRequest, PurchaseItemInput
 from run_server import get_available_port
 
 
@@ -267,6 +273,126 @@ def test_pos_rejects_overpayment(test_db):
             items_data=[{"product_id": prod.id, "serial_number_id": serial.id, "unit_price": 100.0, "gst_rate": 0.0}],
             payments_data=[{"payment_method": "CASH", "amount": 101.0}]
         )
+
+
+def test_pos_checkout_is_idempotent(test_db):
+    biz = test_db.query(Business).first()
+    user = test_db.query(User).filter(User.username == "owner").first()
+    prod = test_db.query(Product).first()
+    serial = test_db.query(SerialNumber).first()
+    sale_data = {
+        "db": test_db,
+        "business_id": biz.id,
+        "user_id": user.id,
+        "user_name": user.full_name,
+        "user_role": "OWNER",
+        "customer_data": {"name": "Retry Customer", "phone": "9999999999"},
+        "items_data": [{"product_id": prod.id, "serial_number_id": serial.id}],
+        "payments_data": [{"payment_method": "CASH", "amount": 69999.0}],
+        "idempotency_key": "retry-test-001",
+    }
+
+    first_sale = process_pos_sale(**sale_data)
+    second_sale = process_pos_sale(**sale_data)
+
+    assert second_sale.id == first_sale.id
+    assert test_db.query(Sale).filter(Sale.id == first_sale.id).count() == 1
+    assert test_db.query(Product).filter(Product.id == prod.id).one().current_stock == 1
+
+
+def test_staff_cannot_apply_discount(test_db):
+    biz = test_db.query(Business).first()
+    user = test_db.query(User).filter(User.username == "staff").first()
+    prod = test_db.query(Product).first()
+
+    with pytest.raises(ValueError, match="require manager or owner"):
+        process_pos_sale(
+            db=test_db,
+            business_id=biz.id,
+            user_id=user.id,
+            user_name=user.full_name,
+            user_role="STAFF",
+            customer_data={"name": "Test", "phone": "9999999999"},
+            items_data=[{"product_id": prod.id, "quantity": 1, "discount": 1.0}],
+            payments_data=[{"payment_method": "CASH", "amount": 1.0}],
+        )
+
+
+def test_customer_payment_preserves_advance_balance(test_db):
+    user = test_db.query(User).filter(User.username == "owner").first()
+    customer = test_db.query(Customer).first()
+    customer.current_balance = 100.0
+    test_db.commit()
+
+    result = receive_customer_payment(
+        customer.id,
+        ReceivePaymentRequest(customer_id=customer.id, amount=150.0, payment_method="CASH"),
+        test_db,
+        user,
+    )
+
+    assert result["new_balance"] == -50.0
+
+
+def test_supplier_payment_rejects_overpayment(test_db):
+    user = test_db.query(User).filter(User.username == "owner").first()
+    supplier = Supplier(
+        business_id=user.business_id,
+        name="Test Supplier",
+        company="Test Distribution",
+        phone="9000000000",
+        current_balance=100.0,
+    )
+    test_db.add(supplier)
+    test_db.commit()
+
+    with pytest.raises(HTTPException, match="cannot exceed"):
+        pay_supplier(
+            supplier.id,
+            PaySupplierRequest(supplier_id=supplier.id, amount=101.0, payment_method="CASH"),
+            test_db,
+            user,
+        )
+
+
+def test_serialized_purchase_requires_one_identifier_per_unit(test_db):
+    user = test_db.query(User).filter(User.username == "owner").first()
+    supplier = Supplier(
+        business_id=user.business_id,
+        name="Purchase Supplier",
+        phone="9111111111",
+    )
+    test_db.add(supplier)
+    test_db.commit()
+    product = test_db.query(Product).first()
+    request = PurchaseCreateRequest(
+        supplier_id=supplier.id,
+        invoice_number="PUR-001",
+        invoice_date=datetime.date.today(),
+        items=[
+            PurchaseItemInput(
+                product_id=product.id,
+                quantity=2,
+                unit_cost=60000.0,
+                gst_rate=18.0,
+                imeis=["358921118234099"],
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException, match="Exactly 2 IMEI"):
+        create_purchase(request, test_db, user)
+
+
+def test_owner_backup_contains_transaction_tables_and_excludes_users(test_db):
+    user = test_db.query(User).filter(User.username == "owner").first()
+    response = full_backup_export(test_db, user)
+    payload = __import__("json").loads(response.body)
+
+    assert payload["version"] == "2.0"
+    assert "sales" in payload["tables"]
+    assert "sale_items" in payload["tables"]
+    assert "users" not in payload["tables"]
 
 
 def test_login_rejects_invalid_password_and_empty_identifier(test_db):

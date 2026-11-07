@@ -1,16 +1,20 @@
-from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, Float, Text, Date
+from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, Float, Text, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database import Base
 from app.models.base import TimeStampedModel
 
 class Sale(Base, TimeStampedModel):
     __tablename__ = "sales"
+    __table_args__ = (
+        UniqueConstraint("business_id", "idempotency_key", name="uq_sales_business_idempotency"),
+    )
 
     business_id = Column(Integer, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True) # Staff who handled counter billing
     
     invoice_number = Column(String(100), nullable=False, index=True)
+    idempotency_key = Column(String(100), nullable=True, index=True)
     invoice_date = Column(Date, nullable=False)
     is_gst_invoice = Column(Boolean, default=True) # Tax Invoice vs Non-GST Bill
     

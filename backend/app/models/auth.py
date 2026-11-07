@@ -47,7 +47,7 @@ class User(Base, TimeStampedModel):
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(150), nullable=False)
     phone = Column(String(20), nullable=True)
-    pin = Column(String(10), nullable=True) # Quick counter 4-digit PIN for staff handover
+    pin = Column(String(255), nullable=True) # Quick counter 4-digit PIN for staff handover
     is_active = Column(Boolean, default=True)
 
     business = relationship("Business", back_populates="users")

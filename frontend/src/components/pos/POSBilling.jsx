@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../api/client';
 import { 
   Search, Plus, Trash2, Smartphone, Receipt, User, ShoppingCart, ArrowLeft,
   CreditCard, DollarSign, QrCode, MessageSquare, Printer, 
-  RefreshCw, CheckCircle, AlertCircle, X, Percent, Shield
+  RefreshCw, CheckCircle, AlertCircle, X, Percent, Shield, Camera, Download
 } from 'lucide-react';
 
 const EMI_DURATIONS = [3, 6, 9, 12, 15, 18, 24];
@@ -56,10 +56,57 @@ export default function POSBilling() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [printFormat, setPrintFormat] = useState('thermal'); // 'thermal' or 'a4'
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const scanInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const checkoutKeyRef = useRef(null);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    scanInputRef.current?.focus();
+  }, [cart.length, isScanning]);
+
+  useEffect(() => {
+    if (!cameraOpen || !videoRef.current) return undefined;
+    let stream;
+    let cancelled = false;
+    const startCamera = async () => {
+      if (!('BarcodeDetector' in window)) {
+        setCameraError('Camera scanning is not supported by this browser. Use a USB scanner or enter the code manually.');
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (cancelled) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        const detector = new window.BarcodeDetector();
+        const scanFrame = async () => {
+          if (cancelled || !videoRef.current) return;
+          const codes = await detector.detect(videoRef.current);
+          if (codes[0]?.rawValue) {
+            setScanInput(codes[0].rawValue);
+            setCameraOpen(false);
+            setTimeout(() => scanInputRef.current?.form?.requestSubmit(), 0);
+            return;
+          }
+          requestAnimationFrame(scanFrame);
+        };
+        scanFrame();
+      } catch (error) {
+        setCameraError(error.message || 'Unable to access the camera.');
+      }
+    };
+    startCamera();
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraOpen]);
 
   const loadData = async () => {
     try {
@@ -165,6 +212,19 @@ export default function POSBilling() {
       hsn_code: product.hsn_code || '8517'
     };
 
+    if (!chosenSerial) {
+      const existing = cart.find((item) => item.product_id === product.id && !item.serial_number_id);
+      if (existing) {
+        if (existing.quantity >= product.current_stock) {
+          showToast(`Only ${product.current_stock} units of ${product.name} are available`, 'error');
+          return;
+        }
+        setCart(cart.map((item) => item.cart_id === existing.cart_id
+          ? { ...item, quantity: item.quantity + 1 } : item));
+        showToast(`Added another ${product.name}`);
+        return;
+      }
+    }
     setCart([...cart, newItem]);
     showToast(`Added ${product.name} to cart`);
   };
@@ -232,6 +292,9 @@ export default function POSBilling() {
 
     setIsSubmitting(true);
     try {
+      if (!checkoutKeyRef.current) {
+        checkoutKeyRef.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      }
       const payload = {
         customer: {
           name: customer.name || 'Customer',
@@ -271,7 +334,8 @@ export default function POSBilling() {
           reference_number: p.reference_number || null
         })),
         emi_details: isEmiSelected ? emiConfig : null,
-        notes: isEmiSelected ? 'Store Financed EMI Purchase' : 'POS Counter Sale'
+        notes: isEmiSelected ? 'Store Financed EMI Purchase' : 'POS Counter Sale',
+        idempotency_key: checkoutKeyRef.current
       };
 
       const saleResult = await api.checkoutPOS(payload);
@@ -284,6 +348,7 @@ export default function POSBilling() {
       setExchangeDevice(null);
       setCustomer({ name: 'Walk-in Customer', phone: '', address: '', gstin: '' });
       setOverallDiscount(0);
+      checkoutKeyRef.current = null;
       loadData();
     } catch (err) {
       showToast(err.message || 'Failed to complete sale', 'error');
@@ -329,7 +394,7 @@ export default function POSBilling() {
         <div>
           <h2 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2">
             <ShoppingCart className="w-5 h-5 text-emerald-600" />
-            Counter POS Billing Terminal
+            Scan & Sell Billing Terminal
           </h2>
           <p className="text-xs text-slate-500">Fast IMEI scanning, mixed split payments, exchange buyback, and GST billing</p>
         </div>
@@ -369,6 +434,7 @@ export default function POSBilling() {
             </div>
             <form onSubmit={handleProductScan} className="flex gap-2">
               <input
+                ref={scanInputRef}
                 autoFocus
                 value={scanInput}
                 onChange={(event) => setScanInput(event.target.value)}
@@ -376,7 +442,17 @@ export default function POSBilling() {
                 className="flex-1 px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-lg outline-none focus:border-emerald-400"
               />
               <button type="submit" disabled={isScanning || !scanInput.trim()} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-xs font-bold">Find & add</button>
+              <button type="button" onClick={() => { setCameraError(''); setCameraOpen(true); }} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-bold" title="Use device camera">
+                <Camera className="w-4 h-4" />
+              </button>
             </form>
+            {cameraOpen && (
+              <div className="rounded-xl bg-black/50 p-3 space-y-2">
+                <video ref={videoRef} muted playsInline className="w-full max-h-56 rounded-lg object-cover" />
+                {cameraError && <p className="text-xs text-rose-200">{cameraError}</p>}
+                <button type="button" onClick={() => setCameraOpen(false)} className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-xs font-semibold">Close camera</button>
+              </div>
+            )}
             {scanResult && (
               <div className={`rounded-lg p-3 text-xs ${scanResult.found ? 'bg-white/10 border border-emerald-400/40' : 'bg-rose-500/15 border border-rose-300/40'}`}>
                 {!scanResult.found ? (
@@ -1148,6 +1224,12 @@ export default function POSBilling() {
                   className="flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-bold shadow-sm"
                 >
                   <Printer className="w-4 h-4" /> Print Receipt
+                </button>
+                <button
+                  onClick={() => api.downloadSalePdf(completedSale.id).catch((error) => showToast(error.message, 'error'))}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold shadow-sm"
+                >
+                  <Download className="w-4 h-4" /> Download PDF
                 </button>
                 {completedSale.whatsapp_link && (
                   <a

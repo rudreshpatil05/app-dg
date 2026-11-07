@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
@@ -26,6 +26,24 @@ if is_sqlite:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 Base = declarative_base()
+
+
+def ensure_runtime_schema_compatibility():
+    """Apply additive local-development changes without rewriting existing data."""
+    inspector = inspect(engine)
+    if "sales" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("sales")}
+    if "idempotency_key" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE sales ADD COLUMN idempotency_key VARCHAR(100)"))
+    index_names = {index["name"] for index in inspector.get_indexes("sales")}
+    if "uq_sales_business_idempotency" not in index_names:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE UNIQUE INDEX uq_sales_business_idempotency "
+                "ON sales (business_id, idempotency_key)"
+            ))
 
 def get_db():
     db = SessionLocal()

@@ -181,9 +181,9 @@ def search_imei_or_barcode(
     serial = db.query(SerialNumber).filter(
         SerialNumber.business_id == current_user.business_id,
         or_(
-            SerialNumber.imei1.ilike(f"%{clean_q}%"),
-            SerialNumber.imei2.ilike(f"%{clean_q}%"),
-            SerialNumber.serial_number.ilike(f"%{clean_q}%")
+            SerialNumber.imei1 == clean_q,
+            SerialNumber.imei2 == clean_q,
+            SerialNumber.serial_number == clean_q
         )
     ).first()
 
@@ -205,6 +205,7 @@ def search_imei_or_barcode(
             "product_name": product.name,
             "brand": product.brand,
             "model": product.model,
+            "category_name": product.category.name if product.category else None,
             "sku": product.sku,
             "barcode": product.barcode,
             "color": serial.color,
@@ -241,6 +242,7 @@ def search_imei_or_barcode(
             "product_name": prod.name,
             "brand": prod.brand,
             "model": prod.model,
+            "category_name": prod.category.name if prod.category else None,
             "sku": prod.sku,
             "barcode": prod.barcode,
             "selling_price": prod.selling_price,
@@ -256,6 +258,16 @@ def search_imei_or_barcode(
             "purchase_cost": 0.0 if is_staff else prod.purchase_cost
         }
 
+    inactive = db.query(Product).filter(
+        Product.business_id == current_user.business_id,
+        or_(Product.barcode == clean_q, Product.sku == clean_q)
+    ).first()
+    if inactive:
+        return {
+            "found": False,
+            "status": "INACTIVE",
+            "message": f"{inactive.name} is inactive and cannot be sold"
+        }
     return {"found": False, "message": "No matching device or product found"}
 
 @router.post("/serial-numbers/{serial_id}/status")

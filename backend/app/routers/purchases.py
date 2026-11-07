@@ -46,6 +46,11 @@ def create_purchase(
     supplier = db.query(Supplier).filter(Supplier.id == req.supplier_id, Supplier.business_id == biz_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
+    if not req.items:
+        raise HTTPException(status_code=400, detail="Purchase must contain at least one item")
+    allowed_payment_methods = {"CASH", "UPI", "CARD", "BANK", "BANK_TRANSFER", "CREDIT"}
+    if req.payment_method.upper() not in allowed_payment_methods:
+        raise HTTPException(status_code=400, detail="Unsupported purchase payment method")
 
     subtotal = 0.0
     gst_total = 0.0
@@ -56,7 +61,18 @@ def create_purchase(
         if not prod:
             raise HTTPException(status_code=404, detail=f"Product {it.product_id} not found")
 
-        qty = len(it.imeis) if (prod.is_serialized and it.imeis) else it.quantity
+        if prod.is_serialized:
+            if not it.imeis or len(it.imeis) != it.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Exactly {it.quantity} IMEI/serial values are required for {prod.name}"
+                )
+            cleaned_imeis = [value.strip() for value in it.imeis]
+            if any(not value for value in cleaned_imeis) or len(set(cleaned_imeis)) != len(cleaned_imeis):
+                raise HTTPException(status_code=400, detail=f"Duplicate or empty IMEI in {prod.name}")
+            qty = len(cleaned_imeis)
+        else:
+            qty = it.quantity
         line_total = (it.unit_cost * qty)
         line_gst = round((line_total * (it.gst_rate / 100.0)), 2)
         
@@ -72,7 +88,7 @@ def create_purchase(
             "gst_rate": it.gst_rate,
             "gst_amount": line_gst,
             "total": line_total + line_gst,
-            "imeis": it.imeis or []
+            "imeis": cleaned_imeis if prod.is_serialized else []
         })
 
     grand_total = max(0.0, (subtotal + gst_total) - req.discount)

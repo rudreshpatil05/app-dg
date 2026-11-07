@@ -1,6 +1,10 @@
 import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.database import get_db
@@ -34,7 +38,8 @@ def pos_checkout(
             exchange_device_data=req.exchange_device.model_dump() if req.exchange_device else None,
             payments_data=[p.model_dump() for p in req.payments],
             emi_details=req.emi_details.model_dump() if req.emi_details else None,
-            notes=req.notes
+            notes=req.notes,
+            idempotency_key=req.idempotency_key
         )
 
         # Generate WhatsApp link for instant counter sharing
@@ -68,6 +73,72 @@ def pos_checkout(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to process sale: {str(e)}")
+
+@router.get("/sales/{sale_id}/pdf")
+def download_sale_pdf(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    sale = db.query(Sale).filter(
+        Sale.id == sale_id,
+        Sale.business_id == current_user.business_id
+    ).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale invoice not found")
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    y = height - 48
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(42, y, current_user.business.name)
+    y -= 22
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(42, y, f"Invoice: {sale.invoice_number}    Date: {sale.invoice_date}")
+    y -= 14
+    pdf.drawString(42, y, f"Customer: {sale.customer_name} ({sale.customer_phone or 'N/A'})")
+    y -= 28
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(42, y, "Product")
+    pdf.drawRightString(410, y, "Qty")
+    pdf.drawRightString(490, y, "GST")
+    pdf.drawRightString(555, y, "Total")
+    y -= 14
+    pdf.setFont("Helvetica", 9)
+    for item in sale.items:
+        name = f"{item.product_name} {item.model or ''}".strip()[:55]
+        pdf.drawString(42, y, name)
+        pdf.drawRightString(410, y, str(item.quantity))
+        pdf.drawRightString(490, y, f"{item.gst_rate:.2f}%")
+        pdf.drawRightString(555, y, f"Rs. {item.total:,.2f}")
+        y -= 14
+        if item.imei1 or item.serial_number:
+            pdf.setFont("Helvetica", 8)
+            pdf.drawString(52, y, f"IMEI/Serial: {item.imei1 or item.serial_number}")
+            y -= 12
+            pdf.setFont("Helvetica", 9)
+    y -= 8
+    pdf.line(42, y, 555, y)
+    y -= 18
+    for label, value in (
+        ("Subtotal", sale.subtotal),
+        ("Discount", sale.discount_amount),
+        ("Tax", sale.total_tax),
+        ("Grand total", sale.final_payable),
+        ("Paid", sale.paid_amount),
+        ("Balance due", sale.balance_due),
+    ):
+        pdf.drawRightString(470, y, f"{label}:")
+        pdf.drawRightString(555, y, f"Rs. {value:,.2f}")
+        y -= 14
+    pdf.drawString(42, y - 10, f"Payment status: {sale.payment_status}    Method: {sale.payment_type}")
+    pdf.save()
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{sale.invoice_number}.pdf"'}
+    )
 
 @router.get("/sales", response_model=List[SaleResponse])
 def list_sales(

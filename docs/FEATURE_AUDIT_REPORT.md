@@ -91,7 +91,7 @@ the time of audit.
   - refund cash/bank transaction;
   - customer-ledger and sale/report adjustment;
   - audit trail and concurrency tests.
-- MySQL concurrency verification for row locking and invoice-number
+- PostgreSQL concurrency verification for row locking and invoice-number
   allocation.
 
 ### P1

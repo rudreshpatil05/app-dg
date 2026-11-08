@@ -9,7 +9,7 @@ from app.routers import (
 )
 
 # Initialize local/staging schema only. Production schema changes must use a
-# reviewed migration against the configured MySQL database.
+# reviewed migration against the configured PostgreSQL database.
 if settings.ENVIRONMENT.lower() != "production":
     Base.metadata.create_all(bind=engine)
     ensure_runtime_schema_compatibility()

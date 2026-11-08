@@ -43,7 +43,7 @@ flowchart LR
 	C -->|JWT and active business| API[FastAPI route]
 	API --> S[Business service]
 	S --> M[SQLAlchemy models]
-	M --> DB[(SQLite local or MySQL deployed)]
+	M --> DB[(SQLite local or PostgreSQL deployed)]
 	DB --> API
 	API --> UI
 ```
@@ -106,7 +106,7 @@ These are the modules shown in the frontend for each role. Individual API operat
 
 - **Frontend:** React 19, Vite 5, Tailwind CSS, Recharts, and Lucide icons.
 - **Backend:** Python, FastAPI, Pydantic settings, SQLAlchemy 2, and Uvicorn.
-- **Database:** SQLite for local development by default; MySQL is expected for staging and production.
+- **Database:** SQLite for local development by default; PostgreSQL is expected for staging and production.
 - **Tests:** pytest with an in-memory SQLite database for core business logic.
 
 ## Run Locally
@@ -171,7 +171,7 @@ The backend reads environment variables and a `.env` file from its current worki
 | Variable | Purpose | Default / guidance |
 |---|---|---|
 | `ENVIRONMENT` | Runtime mode | `development` |
-| `DATABASE_URL` | SQLAlchemy database connection | Defaults to the backend SQLite file in development. Staging/production require MySQL. |
+| `DATABASE_URL` | SQLAlchemy database connection | Defaults to the backend SQLite file in development. Staging/production require PostgreSQL. |
 | `SECRET_KEY` | JWT signing key | Generated and saved locally in development; must be set explicitly for production. |
 | `SEED_DATABASE` | Seed a staging database when enabled | `false`; development seeds automatically only when no business data exists. |
 | `BACKEND_CORS_ORIGINS` | Trusted frontend origins | Defaults to local Vite origins; provide a comma-separated list in deployment. |
@@ -179,7 +179,7 @@ The backend reads environment variables and a `.env` file from its current worki
 | `DEFAULT_CURRENCY` | Business default currency | `INR` |
 | `DEFAULT_GST_RATE` | Business default GST rate | `18.0` |
 
-The example environment file contains a MySQL URL template. MySQL must be installed and reachable before using that URL. For a zero-configuration local run, leave `DATABASE_URL` unset and use the SQLite default.
+The example environment file includes a PostgreSQL URL template. PostgreSQL must be reachable before using that URL. Supabase PostgreSQL connection strings can be used; ensure the hostname, port, database name, and password match the connection details provided by Supabase. URL-encode special characters in the password. For a zero-configuration local run, leave `DATABASE_URL` unset and use the SQLite default.
 
 ## Project Structure
 
@@ -230,7 +230,7 @@ To serve the built frontend locally, run `npm run preview` from `frontend`.
 
 ## Deployment Notes
 
-- Use MySQL for staging and production; SQLite is rejected in those environments.
+- Use PostgreSQL for staging and production; SQLite is rejected in those environments.
 - Set a strong `SECRET_KEY` through a secret manager and configure `DATABASE_URL` and exact `BACKEND_CORS_ORIGINS` values.
 - Set `ENVIRONMENT=production` and keep `SEED_DATABASE=false` in production.
 - Apply reviewed SQL migrations as part of deployment. Production startup intentionally does not mutate the schema.
@@ -241,7 +241,7 @@ To serve the built frontend locally, run `npm run preview` from `frontend`.
 
 - Returns can be recorded for inspection, but the complete approved refund, stock-restoration, customer-ledger, and report-adjustment workflow is not implemented.
 - The backup endpoint exports business-scoped JSON data, but a restore workflow is not implemented.
-- Several collection and purchase workflows still need idempotency and stronger concurrency coverage; MySQL concurrency behavior requires integration verification.
+- Several collection and purchase workflows still need idempotency and stronger concurrency coverage; PostgreSQL concurrency behavior requires integration verification.
 - Payment account mapping is simplified for some methods, and complete purchase-return, inventory-adjustment, and repair-service billing workflows are not available.
 - WhatsApp actions create share/reminder links; they are not a configured message-delivery service. Tax summaries are reports, not electronic tax filing.
 

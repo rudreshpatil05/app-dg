@@ -117,19 +117,30 @@ class Settings(BaseSettings):
 
         value = str(value).strip()
 
-        if value.lower().startswith("mysql://"):
+        if value.lower().startswith("postgres://"):
             value = value.replace(
-                "mysql://",
-                "mysql+pymysql://",
+                "postgres://",
+                "postgresql+psycopg://",
+                1,
+            )
+        elif value.lower().startswith("postgresql://"):
+            value = value.replace(
+                "postgresql://",
+                "postgresql+psycopg://",
                 1,
             )
 
-        if environment in {"staging", "production"}:
-            if value.lower().startswith("sqlite"):
-                raise RuntimeError(
+        if value.lower().startswith("sqlite"):
+            if environment in {"staging", "production"}:
+                raise ValueError(
                     "SQLite is not permitted in staging/production; "
-                    "configure a MySQL DATABASE_URL"
+                    "configure a PostgreSQL DATABASE_URL"
                 )
+        elif not value.lower().startswith("postgresql+psycopg://"):
+            raise ValueError(
+                "Unsupported DATABASE_URL. Use SQLite for development or "
+                "PostgreSQL with the psycopg driver for shared environments."
+            )
 
         return value
 

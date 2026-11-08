@@ -2,15 +2,14 @@ from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
-# Configure SQLite for local development or MySQL for shared environments.
+# Configure SQLite for local development or PostgreSQL for shared environments.
 connect_args = {}
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
-is_mysql = settings.DATABASE_URL.startswith("mysql")
 if is_sqlite:
     connect_args = {"check_same_thread": False}
 
 engine_options = {"connect_args": connect_args, "echo": False, "future": True}
-if is_mysql:
+if not is_sqlite:
     engine_options.update({"pool_pre_ping": True, "pool_recycle": 1800})
 
 engine = create_engine(settings.DATABASE_URL, **engine_options)
